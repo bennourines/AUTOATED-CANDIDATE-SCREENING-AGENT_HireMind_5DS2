@@ -1,0 +1,19 @@
+# Docker
+.dockerignore
+docker-compose.yml.override
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE / Editor specific
+.vscode/
+.idea/
+*.swp
