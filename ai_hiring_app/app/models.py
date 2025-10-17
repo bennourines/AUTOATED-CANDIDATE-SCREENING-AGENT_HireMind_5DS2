@@ -1,19 +1,19 @@
-from sqlalchemy import Column, Integer, String, Text, ARRAY
+# In app/models.py
+from sqlalchemy import Column, Integer, String, Text, ARRAY, ForeignKey
 from .database import Base
 
-class Job(Base):
-    __tablename__ = "jobs"
+class User(Base): # Keeping this
+    __tablename__ = "users"; id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    password = Column(String, nullable=False); role = Column(String, nullable=False)
 
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)
-    description = Column(Text)
+class Job(Base): # REMOVING hiring_manager_id
+    __tablename__ = "jobs"; id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, index=True); description = Column(Text)
     required_skills = Column(ARRAY(String))
 
-class Candidate(Base):
-    __tablename__ = "candidates"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String)
-    email = Column(String, unique=True, index=True)
-    skills = Column(ARRAY(String))
-    raw_text = Column(Text)
+class Candidate(Base): # Unchanged
+    __tablename__ = "candidates"; id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=True); email = Column(String, index=True, nullable=True)
+    skills = Column(ARRAY(String), nullable=True); raw_text = Column(Text, nullable=True)
+    job_id = Column(Integer, ForeignKey("jobs.id")); status = Column(String, default="new", index=True)

@@ -12,6 +12,7 @@ services:
     # The 'db' in the URL is the service name of our database container.
     environment:
       - DATABASE_URL=postgresql://user:password@db:5432/hiring_db
+      - HUGGINGFACE_API_KEY=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
 
   db:
     # Use the official PostgreSQL 13 image from Docker Hub.

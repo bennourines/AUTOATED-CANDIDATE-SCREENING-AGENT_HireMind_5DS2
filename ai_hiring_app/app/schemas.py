@@ -1,22 +1,17 @@
-from pydantic import BaseModel, Field, ConfigDict 
+# In app/schemas.py
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 
-class JobCreate(BaseModel):
-    title: str = Field(..., example="Senior Python Developer")
-    description: str = Field(..., example="We are looking for a developer with experience in FastAPI and AWS.")
-    required_skills: List[str] = Field(..., example=["Python", "FastAPI", "AWS", "SQL"])
+class JobBase(BaseModel): title: str; description: str; required_skills: List[str]
+class JobCreate(JobBase): pass
+class Job(JobBase): # REMOVING hiring_manager_id
+    id: int; model_config = ConfigDict(from_attributes=True)
 
-    
-class Job(JobCreate):
-    id: int
-    model_config = ConfigDict(from_attributes=True)
-
-  
-
-class CandidateProfile(BaseModel):
-    name: Optional[str] = Field(None, example="Jane Doe")
-    email: Optional[str] = Field(None, example="jane.doe@example.com")
-    skills: List[str] = Field([], example=["Python", "Machine Learning"])
-    raw_text: Optional[str] = Field(None, example="Experienced Python developer...")
-    match_score: Optional[int] = Field(None, example=95) # <-- ADD THIS LINE
-    model_config = ConfigDict(from_attributes=True)
+# ... (the rest of the schemas: Candidate, User, Token can remain the same as the 'simple auth' version)
+class CandidateBase(BaseModel): name: Optional[str] = None; email: Optional[str] = None; skills: List[str] = []; raw_text: Optional[str] = None
+class CandidateProfile(CandidateBase): id: int; job_id: int; status: str; match_score: Optional[int] = None; model_config = ConfigDict(from_attributes=True)
+class UserBase(BaseModel): email: str; role: str
+class UserCreate(UserBase): password: str
+class User(UserBase): id: int; model_config = ConfigDict(from_attributes=True)
+class Token(BaseModel): access_token: str; token_type: str
+class TokenData(BaseModel): email: Optional[str] = None

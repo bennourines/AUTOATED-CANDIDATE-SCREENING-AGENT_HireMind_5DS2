@@ -14,3 +14,14 @@ python-docx
 # Database
 SQLAlchemy
 psycopg2-binary
+
+# Authentication & Security
+passlib[bcrypt]
+python-jose[cryptography]
+python-multipart
+bcrypt
+requests
+pypdfium2
+transformers
+torch
+Pillow

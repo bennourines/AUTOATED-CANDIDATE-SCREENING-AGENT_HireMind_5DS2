@@ -1,86 +1,50 @@
-# =================================================================
-# SECTION 1: IMPORTS
-# =================================================================
-from fastapi import FastAPI, Depends, HTTPException, File, UploadFile
-from fastapi.middleware.cors import CORSMiddleware  # << -------------------- ADD THIS LINE
+# In app/main.py
+print("--- RUNNING LATEST main.py (WITH ADVANCED PARSER AND SIMPLE AUTH) ---")
+
+from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
-# These are your application's internal imports
-from . import models, schemas
+from . import models, schemas, utils
 from .database import engine, get_db
-from .ai_modules.resume_parser import parse_resume
-from .ai_modules.matching_engine import calculate_match_score
 
-
-# =================================================================
-# SECTION 2: APPLICATION SETUP
-# =================================================================
-
-# This command tells SQLAlchemy to create all tables defined in models.py
 models.Base.metadata.create_all(bind=engine)
+app = FastAPI(title="AI Hiring App - Simple Auth", version="1.1.0") # Version bump
 
-app = FastAPI(
-    title="AI Hiring Management App API",
-    description="The backend API for the AI-powered hiring application.",
-    version="0.1.0",
-)
-
-# vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
-# START OF NEW CODE BLOCK TO ADD
-# This is the CORS configuration. It must be added after `app` is defined.
-# vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
-
-origins = [
-    "http://localhost:3000",  # The default address for a React development server
-    "http://localhost:3001",  # A common alternative port
-    # You can add the addresses of your deployed frontend here later
-]
-
+origins = ["http://localhost:3000", "http://localhost:3001", "*"] # Added wildcard for safety
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (GET, POST, PUT, DELETE, etc.)
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"]
 )
 
-# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-# END OF NEW CODE BLOCK
-# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
+# =================================================================
+# NEW SCHEMA - Required for the advanced parser endpoint
+# =================================================================
+class ParsedResumeData(schemas.BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    location: Optional[str] = None
+    current_title: Optional[str] = None
+    experience: Optional[str] = None
+    skills: List[str] = []
+    education: Optional[str] = None
+    professional_summary: Optional[str] = None
 
 # =================================================================
-# SECTION 3: API ENDPOINTS (No changes below this line)
+# ENDPOINTS
 # =================================================================
 
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to the AI Hiring API"}
-
-@app.post("/jobs/", response_model=schemas.Job, status_code=201)
-def create_job(job: schemas.JobCreate, db: Session = Depends(get_db)):
+@app.post("/utils/parse-resume-for-profile", response_model=ParsedResumeData, tags=["Utilities"])
+async def parse_resume_for_profile(file: UploadFile = File(...)):
     """
-    Endpoint to create a new job posting and save it to the database.
-    """
-    db_job = models.Job(**job.model_dump())
-    db.add(db_job)
-    db.commit()
-    db.refresh(db_job)
-    return db_job
-
-@app.get("/jobs/", response_model=List[schemas.Job])
-def get_jobs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """
-    Endpoint to retrieve all job postings from the database.
-    """
-    jobs = db.query(models.Job).offset(skip).limit(limit).all()
-    return jobs
-
-@app.post("/upload/resume/", response_model=schemas.CandidateProfile)
-async def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """
-    Endpoint to upload a resume, parse it, and save the candidate to the database.
+    (ADVANCED PARSER) Parses a resume and returns the extracted data as JSON
+    without saving it to the database.
     """
     if not (file.filename.endswith(".pdf") or file.filename.endswith(".docx")):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload a PDF or DOCX.")
@@ -88,42 +52,88 @@ async def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_
     file_bytes = await file.read()
     
     try:
-        parsed_data = parse_resume(file_bytes, file.filename)
+        # This now correctly calls the advanced parser in utils.py
+        parsed_data = utils.parse_resume(file_bytes, file.filename)
+        if "error" in parsed_data:
+            raise HTTPException(status_code=400, detail=parsed_data["error"])
+        return parsed_data
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error parsing file: {str(e)}")
+        print(f"Error parsing resume for profile: {e}")
+        # Make sure to import traceback at the top of the file to see the full error
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Failed to parse resume.")
 
+# --- AUTHENTICATION (SIMPLE) ---
+@app.post("/users/register", response_model=schemas.User, tags=["Authentication"])
+def create_user_simple(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(models.User).filter(models.User.email == user.email).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    new_user = models.User(email=user.email, password=user.password, role=user.role)
+    db.add(new_user); db.commit(); db.refresh(new_user)
+    return new_user
+    
+@app.post("/token", response_model=schemas.Token, tags=["Authentication"])
+def login_simple(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == form_data.username).first()
+    if not user or user.password != form_data.password:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password")
+    access_token = f"simple-token-for-{user.email}-role-{user.role}"
+    return {"access_token": access_token, "token_type": "bearer"}
+
+# --- JOBS ---
+@app.post("/jobs/", response_model=schemas.Job, tags=["Jobs"])
+def create_job(job: schemas.JobCreate, db: Session = Depends(get_db)):
+    db_job = models.Job(**job.model_dump())
+    db.add(db_job); db.commit(); db.refresh(db_job)
+    return db_job
+
+@app.get("/jobs/", response_model=List[schemas.Job], tags=["Jobs"])
+def get_jobs(db: Session = Depends(get_db)):
+    return db.query(models.Job).all()
+
+@app.get("/jobs/{job_id}", response_model=schemas.Job, tags=["Jobs"])
+def get_job(job_id: int, db: Session = Depends(get_db)):
+    db_job = db.query(models.Job).filter(models.Job.id == job_id).first()
+    if not db_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return db_job
+
+# --- CANDIDATES ---
+@app.post("/jobs/{job_id}/upload_resume/", response_model=schemas.CandidateProfile, tags=["Candidates"])
+async def upload_resume(job_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    db_job = db.query(models.Job).filter(models.Job.id == job_id).first()
+    if not db_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    file_bytes = await file.read()
+    
+    # NOTE: This endpoint still uses the advanced parser. 
+    # This is good because it ensures consistency.
+    parsed_data = utils.parse_resume(file_bytes, file.filename)
+    
     if "error" in parsed_data or not parsed_data.get("email"):
         raise HTTPException(status_code=400, detail="Could not parse resume or find an email.")
     
-    existing_candidate = db.query(models.Candidate).filter(models.Candidate.email == parsed_data["email"]).first()
+    existing_candidate = db.query(models.Candidate).filter(models.Candidate.email == parsed_data["email"], models.Candidate.job_id == job_id).first()
     if existing_candidate:
-        raise HTTPException(status_code=400, detail=f"Candidate with email {parsed_data['email']} already exists.")
-
-    db_candidate = models.Candidate(**parsed_data)
-    db.add(db_candidate)
-    db.commit()
-    db.refresh(db_candidate)
+        raise HTTPException(status_code=400, detail="Candidate has already applied for this job.")
     
-    return schemas.CandidateProfile.model_validate(db_candidate)
+    db_candidate = models.Candidate(**parsed_data, job_id=job_id)
+    db.add(db_candidate); db.commit(); db.refresh(db_candidate)
+    return db_candidate
 
-@app.get("/jobs/{job_id}/candidates/rank", response_model=List[schemas.CandidateProfile])
+@app.get("/jobs/{job_id}/candidates/rank", response_model=List[schemas.CandidateProfile], tags=["Candidates"])
 def get_ranked_candidates_for_job(job_id: int, db: Session = Depends(get_db)):
-    """
-    Retrieves all candidates, calculates their match score for a specific job,
-    and returns them ranked from highest score to lowest.
-    """
     db_job = db.query(models.Job).filter(models.Job.id == job_id).first()
-    if db_job is None:
+    if not db_job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
-    job_skills = db_job.required_skills
-    all_candidates = db.query(models.Candidate).all()
-    if not all_candidates:
-        return []
+    job_candidates = db.query(models.Candidate).filter(models.Candidate.job_id == job_id).all()
+    for candidate in job_candidates:
+        candidate.match_score = utils.calculate_match_score(candidate.skills, db_job.required_skills)
+    job_candidates.sort(key=lambda x: x.match_score, reverse=True)
+    return job_candidates
 
-    for candidate in all_candidates:
-        candidate.match_score = calculate_match_score(candidate.skills, job_skills)
-    
-    all_candidates.sort(key=lambda x: x.match_score, reverse=True)
-
-    return all_candidates
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": "AI Hiring Management App API is running!"}
