@@ -1,27 +1,14 @@
-# Web Framework & Server
 fastapi
 uvicorn[standard]
-pydantic
-
-# NLP for Resume Parsing
-spacy
-
-# File Handling
-python-multipart
-pypdf
-python-docx
-
-# Database
-SQLAlchemy
+sqlalchemy
 psycopg2-binary
 
-# Authentication & Security
-passlib[bcrypt]
-python-jose[cryptography]
-python-multipart
-bcrypt
+# NLP and AI
+spacy
 requests
-pypdfium2
-transformers
-torch
-Pillow
+python-multipart
+# Document Parsing
+python-docx
+pypdf
+deepgram-sdk>=3.0.0
+elevenlabs
