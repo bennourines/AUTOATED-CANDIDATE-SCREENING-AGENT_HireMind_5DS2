@@ -2,17 +2,16 @@
 Prosody Analyzer Agent using Ollama Phi4-Mini.
 """
 
-from langchain.tools import Tool
+from langchain_core.tools import Tool
 from typing import List, Dict
 import sys
 import os
 import json
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../services/interview_simulator'))
 
-from prosody_analyzer import prosody_analyzer
-from stress_analyzer import stress_analyzer
-from ..core.base_agent import InterviewBaseAgent
+from agents.services.interview_simulator.prosody_analyzer import prosody_analyzer
+from agents.services.interview_simulator.stress_analyzer import stress_analyzer
+from core.base_agent import InterviewBaseAgent
 
 class ProsodyAgent(InterviewBaseAgent):
     """Agent specialized in voice prosody and stress analysis."""

@@ -2,15 +2,14 @@
 Speech-to-Text Agent using Ollama Phi4-Mini.
 """
 
-from langchain.tools import Tool
+from langchain_core.tools import Tool
 from typing import List
 import sys
 import os
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../services/interview_simulator'))
 
-from stt_handler import stt_handler
-from ..core.base_agent import InterviewBaseAgent
+from agents.services.interview_simulator.stt_handler import stt_handler
+from agents.core.base_agent import InterviewBaseAgent
 
 class STTAgent(InterviewBaseAgent):
     """Agent specialized in audio transcription."""

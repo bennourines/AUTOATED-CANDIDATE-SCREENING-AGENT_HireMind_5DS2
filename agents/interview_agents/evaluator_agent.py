@@ -1,18 +1,17 @@
 """
 Answer Evaluator Agent using Ollama Phi4-Mini.
 """
-
-from langchain.tools import Tool, StructuredTool
+from langchain_core.tools import Tool, StructuredTool
 from typing import List, Dict
 from pydantic import BaseModel, Field
 import sys
 import os
 import json
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../services/interview_simulator'))
+#sys.path.append(os.path.join(os.path.dirname(__file__), '../../services/interview_simulator'))
 
-from evaluator import answer_evaluator
-from ..core.base_agent import InterviewBaseAgent
+from services.interview_simulator.evaluator import answer_evaluator
+from core.base_agent import InterviewBaseAgent
 
 class EvaluationInput(BaseModel):
     """Input schema for evaluation."""

@@ -1,16 +1,13 @@
 """
 Ollama configuration for local LLM usage.
 """
-import os
-from dotenv import load_dotenv
-from langchain_community.llms import Ollama
-from langchain_community.chat_models import ChatOllama
+
+from langchain_ollama import OllamaLLM  # FIXED: Use new import
 import logging
 import requests
+import os
 
 logger = logging.getLogger(__name__)
-load_dotenv()  # Load .env variables
-
 
 class OllamaConfig:
     """Centralized Ollama configuration."""
@@ -18,9 +15,8 @@ class OllamaConfig:
     MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "phi4-mini")
     BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
-    
     @classmethod
-    def get_llm(cls, temperature: float = 0.7) -> Ollama:
+    def get_llm(cls, temperature: float = 0.7) -> OllamaLLM:
         """
         Get Ollama LLM instance.
         
@@ -30,24 +26,7 @@ class OllamaConfig:
         Returns:
             Configured Ollama LLM
         """
-        return Ollama(
-            model=cls.MODEL_NAME,
-            base_url=cls.BASE_URL,
-            temperature=temperature
-        )
-    
-    @classmethod
-    def get_chat_model(cls, temperature: float = 0.7) -> ChatOllama:
-        """
-        Get Ollama Chat Model instance.
-        
-        Args:
-            temperature: Generation temperature (0.0-1.0)
-            
-        Returns:
-            Configured ChatOllama model
-        """
-        return ChatOllama(
+        return OllamaLLM(
             model=cls.MODEL_NAME,
             base_url=cls.BASE_URL,
             temperature=temperature
@@ -63,6 +42,7 @@ class OllamaConfig:
         """
         try:
             response = requests.get(f"{cls.BASE_URL}/api/tags")
+            response.raise_for_status()
             models = response.json().get("models", [])
             available = any(m["name"].startswith(cls.MODEL_NAME) for m in models)
             
@@ -77,7 +57,7 @@ class OllamaConfig:
             logger.info("💡 Start Ollama: ollama serve")
             return False
 
+
 # Test on import
 if __name__ == "__main__":
-    available = OllamaConfig.check_availability()
-    print("Ollama available:", available)
+    OllamaConfig.check_availability()

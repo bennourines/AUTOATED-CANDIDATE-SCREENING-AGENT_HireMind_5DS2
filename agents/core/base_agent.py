@@ -1,14 +1,12 @@
 """
-Base agent class using Ollama Phi4-Mini.
+Base agent class using Ollama Phi4-Mini (Simplified for LangChain 1.0+).
 """
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
-from langchain.agents import AgentExecutor, create_react_agent
-from langchain.prompts import PromptTemplate
-from langchain.memory import ConversationBufferMemory
 from langchain.tools import BaseTool
 import logging
+import json
 
 from .ollama_config import OllamaConfig
 
@@ -25,13 +23,9 @@ class InterviewBaseAgent(ABC):
     ):
         self.agent_name = agent_name
         self.llm = OllamaConfig.get_llm(temperature=temperature)
-        self.memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=False  # Phi4-mini works better with string format
-        )
         self.verbose = verbose
         self.tools = self._define_tools()
-        self.agent_executor = self._create_agent()
+        self.chat_history = []
         
     @abstractmethod
     def _define_tools(self) -> List[BaseTool]:
@@ -43,80 +37,77 @@ class InterviewBaseAgent(ABC):
         """Define agent's role and instructions."""
         pass
     
-    def _create_agent(self) -> AgentExecutor:
-        """Create the agent executor using ReAct pattern."""
+    def _build_prompt(self, task: str) -> str:
+        """Build prompt with system instructions and tools."""
+        tools_desc = "\n".join([
+            f"- {tool.name}: {tool.description}" 
+            for tool in self.tools
+        ])
         
-        # ReAct prompt template (works well with Phi4-Mini)
-        template = """You are {role}.
-
-{system_prompt}
-
-TOOLS:
-------
-You have access to the following tools:
-
-{tools}
-
-To use a tool, use the following format:
-
-```
-Thought: Do I need to use a tool? Yes
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-```
-
-When you have a final answer, respond with:
-
-```
-Thought: I now know the final answer
-Final Answer: [your answer here]
-```
-
-Begin!
-
-Previous conversation:
-{chat_history}
-
-Question: {input}
-{agent_scratchpad}"""
-
-        prompt = PromptTemplate(
-            template=template,
-            input_variables=["input", "chat_history", "agent_scratchpad"],
-            partial_variables={
-                "role": self.agent_name,
-                "system_prompt": self._get_system_prompt(),
-                "tools": "\n".join([f"{tool.name}: {tool.description}" for tool in self.tools]),
-                "tool_names": ", ".join([tool.name for tool in self.tools])
-            }
-        )
+        history = "\n".join([
+            f"User: {h['user']}\nAgent: {h['agent']}" 
+            for h in self.chat_history[-3:]  # Last 3 exchanges
+        ]) if self.chat_history else "No previous conversation."
         
-        agent = create_react_agent(self.llm, self.tools, prompt)
+        prompt = f"""You are {self.agent_name}.
+
+{self._get_system_prompt()}
+
+AVAILABLE TOOLS:
+{tools_desc}
+
+CONVERSATION HISTORY:
+{history}
+
+CURRENT TASK:
+{task}
+
+INSTRUCTIONS:
+1. Think about which tool(s) you need to use
+2. Use the tools by calling them mentally
+3. Provide a clear, actionable response
+4. Be concise and specific
+
+YOUR RESPONSE:"""
         
-        return AgentExecutor(
-            agent=agent,
-            tools=self.tools,
-            memory=self.memory,
-            verbose=self.verbose,
-            handle_parsing_errors=True,
-            max_iterations=5  # Limit iterations for Phi4-Mini
-        )
+        return prompt
+    
+    def _execute_tool(self, tool_name: str, tool_input: Any) -> str:
+        """Execute a tool by name."""
+        for tool in self.tools:
+            if tool.name == tool_name:
+                try:
+                    if self.verbose:
+                        logger.info(f"[{self.agent_name}] Executing tool: {tool_name}")
+                    result = tool.func(tool_input)
+                    return str(result)
+                except Exception as e:
+                    logger.error(f"Tool {tool_name} failed: {e}")
+                    return f"Error executing {tool_name}: {str(e)}"
+        return f"Tool {tool_name} not found"
     
     async def execute(self, task: str, context: Optional[Dict] = None) -> Dict[str, Any]:
         """Execute agent task."""
         try:
-            logger.info(f"[{self.agent_name}] Executing: {task[:100]}...")
+            if self.verbose:
+                logger.info(f"[{self.agent_name}] Executing: {task[:100]}...")
             
-            # For async execution
-            result = await self.agent_executor.ainvoke({
-                "input": task
+            # Build prompt
+            prompt = self._build_prompt(task)
+            
+            # Call LLM
+            response = await self.llm.ainvoke(prompt)
+            
+            # Store in history
+            self.chat_history.append({
+                "user": task,
+                "agent": response
             })
             
             return {
                 "success": True,
                 "agent": self.agent_name,
-                "result": result.get("output", ""),
+                "result": response,
                 "metadata": context
             }
         except Exception as e:
@@ -130,16 +121,25 @@ Question: {input}
     def execute_sync(self, task: str, context: Optional[Dict] = None) -> Dict[str, Any]:
         """Synchronous execution (useful for testing)."""
         try:
-            logger.info(f"[{self.agent_name}] Executing sync: {task[:100]}...")
+            if self.verbose:
+                logger.info(f"[{self.agent_name}] Executing sync: {task[:100]}...")
             
-            result = self.agent_executor.invoke({
-                "input": task
+            # Build prompt
+            prompt = self._build_prompt(task)
+            
+            # Call LLM synchronously
+            response = self.llm.invoke(prompt)
+            
+            # Store in history
+            self.chat_history.append({
+                "user": task,
+                "agent": response
             })
             
             return {
                 "success": True,
                 "agent": self.agent_name,
-                "result": result.get("output", ""),
+                "result": response,
                 "metadata": context
             }
         except Exception as e:
@@ -149,3 +149,14 @@ Question: {input}
                 "agent": self.agent_name,
                 "error": str(e)
             }
+    
+    def call_tool(self, tool_name: str, tool_input: Any) -> str:
+        """
+        Manually call a tool (for when agent needs to use tools).
+        This can be used by CrewAI or manually.
+        """
+        return self._execute_tool(tool_name, tool_input)
+    
+    def reset_history(self):
+        """Reset conversation history."""
+        self.chat_history = []

@@ -2,7 +2,7 @@
 Summarizer Agent using Ollama Phi4-Mini.
 """
 
-from langchain.tools import Tool
+from langchain_core.tools import Tool
 from typing import List
 import sys
 import os

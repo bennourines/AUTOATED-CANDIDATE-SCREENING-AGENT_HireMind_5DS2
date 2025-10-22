@@ -67,3 +67,10 @@ python -m spacy download en_core_web_sm
 
 # 7. Create sample Q&A bank
 python scripts/create_qa_bank.py
+
+##Run the Services
+# Terminal 1: Start Interview Simulator
+uvicorn services.interview_simulator.app:app --port 8001 --reload
+
+# Terminal 2: Start Cheating Detector
+uvicorn services.cheating_detector.app:app --port 8002 --reload
