@@ -1,0 +1,11 @@
+# LangChain & CrewAI
+langchain
+langchain-community
+crewai
+crewai-tools
+
+# Ollama Integration
+ollama
+langchain-ollama
+
+
