@@ -1,198 +1,276 @@
 """
-Interview Simulator with Ollama-powered CrewAI integration.
+FastAPI app for interview simulator using LangChain agents with Ollama.
+Migrated from CrewAI to pure LangChain orchestration.
 """
 
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
-from fastapi.responses import JSONResponse
-import logging
-from pathlib import Path
-import shutil
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
+import logging
 import sys
-import uuid
+import os
+import json
 
-# Add agents to path
-sys.path.append('../../')
+# Add parent directory to path
+sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
-from agents.crews.interview_crew import InterviewCrew
+# Import LangChain orchestrator (replaced CrewAI)
+from crews.interview_orchestrator import InterviewOrchestrator
 from core.ollama_config import OllamaConfig
-from .models import (
-    SessionStartRequest,
-    SessionStartResponse,
-    QuestionResponse
-)
-from .qa_bank import question_bank
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Interview Crew AI (Ollama)",
-    description="Multi-agent interview system powered by Ollama Phi4-Mini",
-    version="2.0.0-ollama"
+    title="HireMind Interview Simulator API",
+    description="AI-powered interview system using LangChain + Ollama",
+    version="2.0.0"
 )
 
-# Initialize crew
-try:
-    interview_crew = InterviewCrew()
-    CREW_AVAILABLE = True
-except Exception as e:
-    logger.error(f"Failed to initialize crew: {e}")
-    logger.error("💡 Make sure Ollama is running: ollama serve")
-    logger.error("💡 And model is pulled: ollama pull phi4-mini")
-    CREW_AVAILABLE = False
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-sessions = {}
-UPLOAD_DIR = Path("data/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# Global orchestrator instance
+orchestrator: Optional[InterviewOrchestrator] = None
 
-@app.get("/health")
-async def health_check():
-    """Health check with Ollama status."""
-    ollama_status = OllamaConfig.check_availability()
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the interview orchestrator on startup."""
+    global orchestrator
     
-    return {
-        "status": "healthy" if CREW_AVAILABLE else "degraded",
-        "service": "interview_crew_ai_ollama",
-        "ollama_available": ollama_status,
-        "model": OllamaConfig.MODEL_NAME,
-        "agents": ["interviewer", "stt", "prosody", "emotion", "evaluator", "summarizer"] if CREW_AVAILABLE else []
-    }
-
-@app.post("/start_session", response_model=SessionStartResponse)
-async def start_session(request: SessionStartRequest):
-    """Start interview session with Ollama-powered question selection."""
-    
-    if not CREW_AVAILABLE:
-        raise HTTPException(
-            status_code=503,
-            detail="Crew not available. Check Ollama server."
-        )
-    
-    logger.info(f"🚀 Starting Ollama-powered session: {request.dict()}")
+    logger.info("="*70)
+    logger.info("🚀 HireMind Interview Simulator Starting...")
+    logger.info("="*70)
     
     try:
-        # Use traditional question bank for now
-        questions = question_bank.get_random_questions(
-            num_questions=request.num_questions,
-            categories=request.categories,
-            difficulty=request.difficulty
-        )
+        # Check Ollama availability
+        logger.info("🔍 Checking Ollama server...")
+        if not OllamaConfig.check_availability():
+            logger.error("❌ Ollama server not available!")
+            logger.info("💡 Start Ollama: ollama serve")
+            logger.info(f"💡 Pull model: ollama pull {os.getenv('OLLAMA_MODEL_NAME', 'phi4-mini')}")
+            return
         
-        if not questions:
-            raise HTTPException(status_code=404, detail="No questions found")
+        logger.info(f"✅ Ollama server available at {os.getenv('OLLAMA_BASE_URL')}")
+        logger.info(f"✅ Using model: {os.getenv('OLLAMA_MODEL_NAME', 'phi4-mini')}")
         
-        session_id = f"ollama_{uuid.uuid4().hex[:12]}"
+        # Initialize orchestrator
+        logger.info("🔧 Initializing LangChain orchestrator...")
+        orchestrator = InterviewOrchestrator()
         
-        sessions[session_id] = {
-            "session_id": session_id,
-            "questions": questions,
-            "current_index": 0,
-            "answers": []
-        }
-        
-        return SessionStartResponse(
-            session_id=session_id,
-            total_questions=request.num_questions,
-            current_question=QuestionResponse(**questions[0])
-        )
+        # Log status
+        status = orchestrator.get_status()
+        logger.info("\n" + "="*70)
+        logger.info("✅ SYSTEM READY")
+        logger.info("="*70)
+        logger.info(f"Framework: {status['framework']}")
+        logger.info(f"Model: {status['model']}")
+        logger.info(f"Agents: {len(status['agents'])} ready")
+        logger.info(f"Tools: {', '.join(status['tools'].values())}")
+        logger.info("="*70 + "\n")
         
     except Exception as e:
-        logger.error(f"Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ Failed to initialize orchestrator: {e}")
+        import traceback
+        traceback.print_exc()
 
-@app.post("/submit_answer")
-async def submit_answer(
-    session_id: str = Form(...),
-    question_id: int = Form(...),
-    audio: Optional[UploadFile] = File(None),
-    video: Optional[UploadFile] = File(None)
+@app.get("/")
+async def root():
+    """Health check and system status endpoint."""
+    if orchestrator is None:
+        return {
+            "status": "error",
+            "message": "Orchestrator not initialized. Check Ollama server.",
+            "hint": "Run: ollama serve"
+        }
+    
+    status = orchestrator.get_status()
+    return {
+        "status": "running",
+        "message": "HireMind Interview Simulator API",
+        "version": "2.0.0",
+        "framework": status["framework"],
+        "model": status["model"],
+        "agents": status["agents"],
+        "tools": status["tools"],
+        "capabilities": status["capabilities"]
+    }
+
+@app.get("/api/status")
+async def get_status():
+    """Detailed system status."""
+    if orchestrator is None:
+        raise HTTPException(status_code=503, detail="Orchestrator not ready")
+    
+    return orchestrator.get_status()
+
+@app.post("/api/select-questions")
+async def select_questions(
+    categories: str = Form(..., description="Comma-separated categories"),
+    difficulty: str = Form("medium", description="easy, medium, or hard"),
+    num_questions: int = Form(3, description="Number of questions to select"),
+    candidate_performance: str = Form("average", description="low, average, or high")
 ):
-    """Process answer with Ollama crew."""
+    """
+    Select interview questions based on criteria.
     
-    if not CREW_AVAILABLE:
-        raise HTTPException(status_code=503, detail="Crew not available")
-    
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    # Save file
-    if video:
-        file_path = UPLOAD_DIR / f"{session_id}_{question_id}_{video.filename}"
-        with open(file_path, "wb") as f:
-            shutil.copyfileobj(video.file, f)
-        video_path = str(file_path)
-        audio_path = None
-    elif audio:
-        file_path = UPLOAD_DIR / f"{session_id}_{question_id}_{audio.filename}"
-        with open(file_path, "wb") as f:
-            shutil.copyfileobj(audio.file, f)
-        audio_path = str(file_path)
-        video_path = None
-    else:
-        raise HTTPException(status_code=400, detail="No file provided")
+    Example:
+        categories: "Python,Algorithms,Data Structures"
+        difficulty: "medium"
+        num_questions: 5
+        candidate_performance: "average"
+    """
+    if orchestrator is None:
+        raise HTTPException(status_code=503, detail="Orchestrator not ready")
     
     try:
-        session = sessions[session_id]
-        question = next((q for q in session["questions"] if q["id"] == question_id), None)
+        # Parse categories
+        category_list = [c.strip() for c in categories.split(",")]
         
-        if not question:
-            raise HTTPException(status_code=404, detail="Question not found")
+        logger.info(f"📋 Question selection request: {num_questions} questions")
+        logger.info(f"   Categories: {category_list}")
+        logger.info(f"   Difficulty: {difficulty}")
         
-        # Process with crew
-        logger.info("🤖 Processing with Ollama crew...")
-        result = await interview_crew.process_answer(
+        # Call orchestrator
+        result = await orchestrator.select_questions(
+            categories=category_list,
+            difficulty=difficulty,
+            num_questions=num_questions,
+            candidate_performance=candidate_performance
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Question selection failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/process-answer")
+async def process_answer(
+    question_id: int = Form(...),
+    question_text: str = Form(...),
+    category: str = Form("General"),
+    difficulty: str = Form("medium"),
+    audio_file: UploadFile = File(...),
+    video_file: Optional[UploadFile] = File(None)
+):
+    """
+    Process candidate answer through complete pipeline.
+    
+    Pipeline:
+    1. Transcription (Vosk STT)
+    2. Prosody Analysis (Librosa)
+    3. Emotion Detection (DeepFace, if video provided)
+    4. Comprehensive Evaluation (Phi4-Mini)
+    """
+    if orchestrator is None:
+        raise HTTPException(status_code=503, detail="Orchestrator not ready")
+    
+    try:
+        # Create temp directory
+        os.makedirs("temp", exist_ok=True)
+        
+        # Save audio file
+        audio_path = f"temp/audio_{question_id}_{audio_file.filename}"
+        logger.info(f"💾 Saving audio to: {audio_path}")
+        
+        with open(audio_path, "wb") as f:
+            content = await audio_file.read()
+            f.write(content)
+        
+        # Save video file (if provided)
+        video_path = None
+        if video_file:
+            video_path = f"temp/video_{question_id}_{video_file.filename}"
+            logger.info(f"💾 Saving video to: {video_path}")
+            
+            with open(video_path, "wb") as f:
+                content = await video_file.read()
+                f.write(content)
+        
+        # Prepare question dict
+        question = {
+            "id": question_id,
+            "question": question_text,
+            "category": category,
+            "difficulty": difficulty
+        }
+        
+        # Process through orchestrator
+        logger.info(f"🚀 Processing answer for question {question_id}")
+        result = await orchestrator.process_answer(
             question=question,
-            audio_path=audio_path or video_path,
+            audio_path=audio_path,
             video_path=video_path
         )
         
-        # Store result
-        session["answers"].append({
-            "question_id": question_id,
-            "evaluation": result["evaluation"]
-        })
+        # Cleanup temp files
+        try:
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+            if video_path and os.path.exists(video_path):
+                os.remove(video_path)
+        except Exception as cleanup_error:
+            logger.warning(f"⚠️ Cleanup failed: {cleanup_error}")
         
-        # Move to next question
-        session["current_index"] += 1
-        
-        return JSONResponse(content={
-            "status": "success",
-            "result": result,
-            "model": "phi4-mini",
-            "message": "Processed by Ollama-powered crew"
-        })
+        return result
         
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"❌ Answer processing failed: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/session_summary/{session_id}")
-async def get_session_summary(session_id: str):
-    """Generate final session summary."""
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
+@app.post("/api/generate-summary")
+async def generate_summary(session_data: dict):
+    """
+    Generate comprehensive session summary.
     
-    session = sessions[session_id]
+    Expected session_data format:
+    {
+        "candidate_id": "12345",
+        "answers": [
+            {
+                "question_id": 1,
+                "question": "...",
+                "evaluation": {...}
+            }
+        ]
+    }
+    """
+    if orchestrator is None:
+        raise HTTPException(status_code=503, detail="Orchestrator not ready")
     
-    # Generate summary through crew
-    summary = await interview_crew.generate_session_summary(session)
-    
-    return JSONResponse(content=summary)
-
-@app.on_event("startup")
-async def startup():
-    """Check Ollama on startup."""
-    logger.info("🦙 Interview Crew with Ollama Phi4-Mini starting...")
-    
-    if OllamaConfig.check_availability():
-        logger.info(f"✅ Using model: {OllamaConfig.MODEL_NAME}")
-        logger.info("✅ All agents ready")
-    else:
-        logger.warning("⚠️ Ollama not available - some features disabled")
-        logger.info("💡 Start Ollama: ollama serve")
-        logger.info(f"💡 Pull model: ollama pull {OllamaConfig.MODEL_NAME}")
+    try:
+        logger.info(f"📊 Generating summary for {len(session_data.get('answers', []))} answers")
+        
+        result = await orchestrator.generate_session_summary(session_data)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Summary generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    
+    logger.info("🚀 Starting HireMind Interview Simulator API...")
+    logger.info("📡 Server will be available at: http://localhost:8000")
+    logger.info("📚 API docs available at: http://localhost:8000/docs")
+    
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        log_level="info"
+    )

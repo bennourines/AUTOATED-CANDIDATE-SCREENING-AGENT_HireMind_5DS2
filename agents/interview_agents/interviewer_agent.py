@@ -2,113 +2,96 @@
 Interviewer Agent using Ollama Phi4-Mini.
 """
 
-from langchain_core.tools import StructuredTool, Tool
-from langchain.tools import tool
-from typing import List, Dict
-from pydantic import BaseModel, Field
+from langchain_core.tools import tool
+from typing import List
 import sys
 import os
+import json
 
-# Add parent directory to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../services/interview_simulator'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from services.interview_simulator.qa_bank import question_bank
+from services.interview_simulator.qa_bank import qa_bank  # ← Fixed import
 from core.base_agent import InterviewBaseAgent
 
-class QuestionInput(BaseModel):
-    """Input schema for question selection."""
-    categories: str = Field(description="Comma-separated job categories (e.g., 'Python,Backend')")
-    difficulty: str = Field(description="Question difficulty: easy, medium, or hard")
-    performance: str = Field(description="Current candidate performance: struggling, average, or excellent")
-
 class InterviewerAgent(InterviewBaseAgent):
-    """Agent that selects interview questions intelligently using Phi4-Mini."""
+    """Agent specialized in question selection and interview management."""
     
     def __init__(self):
         super().__init__(
-            agent_name="Interview_Coordinator",
-            temperature=0.8  # More creative for question selection
+            agent_name="Senior_Interviewer",
+            temperature=0.8
         )
     
     def _define_tools(self) -> List:
-        return [
-            StructuredTool.from_function(
-                func=self._select_question,
-                name="select_interview_question",
-                description="Select an appropriate interview question based on categories, difficulty, and candidate performance",
-                args_schema=QuestionInput
-            ),
-            Tool(
-                name="get_question_by_id",
-                func=self._get_question_details,
-                description="Retrieve full question details by question ID (integer)"
-            ),
-            Tool(
-                name="adjust_difficulty_level",
-                func=self._recommend_difficulty,
-                description="Recommend difficulty adjustment based on performance description"
-            )
-        ]
+        """Define tools using @tool decorator."""
+        
+        @tool
+        def select_interview_question(category: str, difficulty: str = "medium") -> str:
+            """
+            Select an interview question from the database.
+            
+            Args:
+                category: Question category (e.g., "Python", "Algorithms")
+                difficulty: Question difficulty ("easy", "medium", "hard")
+            
+            Returns:
+                JSON string with question details
+            """
+            try:
+                questions = qa_bank.get_questions_by_category(category, difficulty)
+                if questions:
+                    question = questions[0]
+                    return json.dumps({
+                        "id": question.get("id"),
+                        "question": question.get("question"),
+                        "category": question.get("category"),
+                        "difficulty": question.get("difficulty")
+                    })
+                else:
+                    return json.dumps({"error": f"No questions found for {category}/{difficulty}"})
+            except Exception as e:
+                return json.dumps({"error": str(e)})
+        
+        @tool
+        def get_available_categories() -> str:
+            """Get list of all available question categories."""
+            try:
+                categories = qa_bank.get_all_categories()
+                return json.dumps({"categories": categories})
+            except Exception as e:
+                return json.dumps({"error": str(e)})
+        
+        @tool
+        def adjust_difficulty(current_score: float) -> str:
+            """
+            Suggest difficulty adjustment based on candidate score.
+            
+            Args:
+                current_score: Candidate's current score (0-100)
+            
+            Returns:
+                Recommended difficulty level
+            """
+            if current_score >= 80:
+                return "hard"
+            elif current_score >= 50:
+                return "medium"
+            else:
+                return "easy"
+        
+        return [select_interview_question, get_available_categories, adjust_difficulty]
     
     def _get_system_prompt(self) -> str:
-        return """You are an experienced technical interviewer with 10+ years of experience.
+        return """You are a Senior Technical Interviewer with 10+ years of experience.
 
 Your responsibilities:
-1. Select appropriate questions based on candidate's profile and performance
-2. Adapt difficulty dynamically:
-   - If candidate is struggling (score < 60%): Choose easier questions
-   - If candidate is average (60-85%): Maintain current difficulty
-   - If candidate excels (score > 85%): Increase difficulty
-3. Ensure natural interview flow and variety
-4. Match questions to job requirements
+- Select appropriate questions based on candidate level
+- Adjust difficulty dynamically based on performance
+- Ensure fair and comprehensive technical assessment
 
-Always use your tools to make data-driven decisions."""
-    
-    def _select_question(
-        self,
-        categories: str,
-        difficulty: str,
-        performance: str
-    ) -> str:
-        """Select next question based on context."""
-        # Parse categories
-        category_list = [c.strip() for c in categories.split(",")]
-        
-        # Adjust difficulty based on performance
-        if "struggling" in performance.lower() or "poor" in performance.lower():
-            difficulty = "easy"
-        elif "excellent" in performance.lower() or "great" in performance.lower():
-            difficulty = "hard"
-        
-        # Get question from bank
-        questions = question_bank.get_random_questions(
-            num_questions=1,
-            categories=category_list,
-            difficulty=difficulty
-        )
-        
-        if questions:
-            q = questions[0]
-            return f"Question ID {q['id']}: {q['question']}\nIdeal Answer: {q['ideal_answer'][:100]}..."
-        
-        return "No suitable question found. Try different criteria."
-    
-    def _get_question_details(self, question_id: str) -> str:
-        """Get question by ID."""
-        try:
-            qid = int(question_id)
-            question = question_bank.get_question_by_id(qid)
-            if question:
-                return f"ID: {question['id']}\nQuestion: {question['question']}\nCategory: {question['category']}\nDifficulty: {question['difficulty']}"
-            return f"Question ID {question_id} not found"
-        except ValueError:
-            return "Invalid question ID format. Must be an integer."
-    
-    def _recommend_difficulty(self, performance_desc: str) -> str:
-        """Recommend difficulty adjustment."""
-        if any(word in performance_desc.lower() for word in ["struggling", "poor", "weak", "difficulty"]):
-            return "Recommend: DECREASE difficulty to 'easy' to build confidence"
-        elif any(word in performance_desc.lower() for word in ["excellent", "great", "strong", "perfect"]):
-            return "Recommend: INCREASE difficulty to 'hard' to challenge further"
-        else:
-            return "Recommend: MAINTAIN current difficulty level"
+Guidelines:
+- Start with medium difficulty
+- Increase difficulty if candidate scores >80%
+- Decrease difficulty if candidate scores <50%
+- Cover multiple technical areas
+- Provide diverse question types"""

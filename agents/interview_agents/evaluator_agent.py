@@ -1,116 +1,173 @@
 """
-Answer Evaluator Agent using Ollama Phi4-Mini.
+Evaluator Agent using Ollama Phi4-Mini.
 """
-from langchain_core.tools import Tool, StructuredTool
-from typing import List, Dict
-from pydantic import BaseModel, Field
+
+from langchain_core.tools import tool
+from typing import List
 import sys
 import os
 import json
 
-#sys.path.append(os.path.join(os.path.dirname(__file__), '../../services/interview_simulator'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from services.interview_simulator.evaluator import answer_evaluator
+from services.interview_simulator.evaluator import evaluator  
 from core.base_agent import InterviewBaseAgent
+import logging
 
-class EvaluationInput(BaseModel):
-    """Input schema for evaluation."""
-    question: str = Field(description="The interview question asked")
-    transcript: str = Field(description="Candidate's answer transcript")
-    metrics_json: str = Field(description="JSON string of prosody/stress metrics")
+logger = logging.getLogger(__name__)
 
 class EvaluatorAgent(InterviewBaseAgent):
-    """Agent that evaluates answers comprehensively."""
+    """Agent specialized in comprehensive answer evaluation."""
     
     def __init__(self):
-        super().__init__(agent_name="Evaluator", temperature=0.6)
+        super().__init__(
+            agent_name="Senior_Evaluator",
+            temperature=0.4
+        )
     
     def _define_tools(self) -> List:
+        """Define tools using @tool decorator."""
+        
+        @tool
+        def evaluate_technical_answer(
+            question: str,
+            answer: str,
+            expected_keywords: str
+        ) -> str:
+            """
+            Evaluate technical accuracy and completeness.
+            
+            Args:
+                question: Interview question
+                answer: Candidate answer
+                expected_keywords: Expected technical keywords (comma-separated)
+                
+            Returns:
+                JSON string with technical evaluation
+            """
+            try:
+                result = evaluator.evaluate_answer(
+                    question=question,
+                    answer=answer,
+                    expected_keywords=expected_keywords.split(',')
+                )
+                
+                return json.dumps({
+                    'technical_score': result['scores']['technical_accuracy'],
+                    'completeness': result['scores']['completeness'],
+                    'keyword_coverage': result['keyword_coverage'],
+                    'feedback': result['detailed_feedback']['technical']
+                })
+            except Exception as e:
+                return json.dumps({'error': str(e)})
+        
+        @tool
+        def analyze_communication_quality(
+            answer: str,
+            prosody_data: dict
+        ) -> str:
+            """
+            Analyze communication quality (clarity, structure, delivery).
+            
+            Args:
+                answer: Answer text
+                prosody_data: Voice quality metrics
+                
+            Returns:
+                Communication analysis
+            """
+            try:
+                # Analyze structure
+                sentences = answer.split('.')
+                avg_sentence_length = len(answer.split()) / max(len(sentences), 1)
+                
+                # Communication score
+                clarity_score = min(100, 100 - abs(avg_sentence_length - 20) * 2)
+                
+                return json.dumps({
+                    'clarity_score': round(clarity_score, 1),
+                    'structure': 'good' if len(sentences) > 2 else 'needs_improvement',
+                    'voice_quality': prosody_data.get('overall_quality', 'unknown'),
+                    'feedback': 'Clear and well-structured' if clarity_score > 70 else 'Consider more concise responses'
+                })
+            except Exception as e:
+                return json.dumps({'error': str(e)})
+        
+        @tool
+        def assess_confidence_level(
+            emotion_data: dict,
+            prosody_data: dict
+        ) -> str:
+            """
+            Assess candidate confidence from emotion and voice analysis.
+            
+            Args:
+                emotion_data: Facial emotion analysis
+                prosody_data: Voice quality metrics
+                
+            Returns:
+                Confidence assessment
+            """
+            try:
+                # Combine signals
+                stress_level = emotion_data.get('stress_level', 0)
+                voice_stability = prosody_data.get('stability_score', 50)
+                
+                confidence = (100 - stress_level * 100 + voice_stability) / 2
+                
+                return json.dumps({
+                    'confidence_score': round(confidence, 1),
+                    'stress_indicators': stress_level > 0.3,
+                    'voice_stability': voice_stability,
+                    'overall_impression': 'confident' if confidence > 70 else 'moderately confident' if confidence > 50 else 'nervous'
+                })
+            except Exception as e:
+                return json.dumps({'error': str(e)})
+        
         return [
-            StructuredTool.from_function(
-                func=self._evaluate,
-                name="evaluate_answer",
-                description="Comprehensively evaluate answer quality with all metrics",
-                args_schema=EvaluationInput
-            ),
-            Tool(
-                name="generate_feedback",
-                func=self._generate_feedback,
-                description="Generate personalized feedback for improvement. Input: JSON evaluation result"
-            ),
-            Tool(
-                name="compare_to_ideal_answer",
-                func=self._compare_ideal,
-                description="Compare candidate answer to ideal answer. Input: 'candidate_answer|ideal_answer'"
-            )
+            evaluate_technical_answer,
+            analyze_communication_quality,
+            assess_confidence_level
         ]
     
     def _get_system_prompt(self) -> str:
-        return """You are a senior technical interviewer and evaluator.
+        return """You are a Senior Technical Interviewer and Evaluator with 15+ years of experience.
 
-Your evaluation criteria:
-- Content relevance (40%): Does it answer the question?
-- Technical accuracy (30%): Is the information correct?
-- Communication clarity (20%): Well-structured and articulate?
-- Delivery (10%): Confidence, pace, engagement
+Your role is to provide comprehensive, fair, and constructive evaluation of interview answers.
 
-Provide constructive, actionable feedback that helps candidates improve."""
-    
-    def _evaluate(self, question: str, transcript: str, metrics_json: str) -> str:
-        """Evaluate answer with all metrics."""
-        try:
-            metrics = json.loads(metrics_json)
-            
-            result = answer_evaluator.evaluate_answer(
-                question=question,
-                transcript=transcript,
-                **metrics
-            )
-            
-            return json.dumps(result, indent=2)
-        except Exception as e:
-            return f"Evaluation error: {str(e)}"
-    
-    def _generate_feedback(self, evaluation_json: str) -> str:
-        """Generate detailed feedback."""
-        try:
-            evaluation = json.loads(evaluation_json)
-            feedback = []
-            
-            # Content feedback
-            content_score = evaluation.get("scores", {}).get("content_score", 0)
-            if content_score < 60:
-                feedback.append("Work on providing more relevant and complete answers")
-            elif content_score > 85:
-                feedback.append("Excellent content coverage!")
-            
-            # Delivery feedback
-            delivery_score = evaluation.get("scores", {}).get("delivery_score", 0)
-            if delivery_score < 60:
-                feedback.append("Focus on improving speech pace and reducing hesitations")
-            
-            return "\n".join(feedback) if feedback else "Good performance overall"
-            
-        except Exception as e:
-            return f"Feedback generation error: {str(e)}"
-    
-    def _compare_ideal(self, input_str: str) -> str:
-        """Compare to ideal answer."""
-        try:
-            parts = input_str.split("|")
-            if len(parts) != 2:
-                return "Error: Input format should be 'candidate_answer|ideal_answer'"
-            
-            candidate, ideal = parts
-            
-            # Simple similarity check (can be enhanced with embeddings)
-            candidate_words = set(candidate.lower().split())
-            ideal_words = set(ideal.lower().split())
-            
-            overlap = len(candidate_words & ideal_words)
-            similarity = overlap / max(len(ideal_words), 1) * 100
-            
-            return f"Similarity to ideal answer: {similarity:.1f}%"
-            
-        except Exception as e:
-            return f"Comparison error: {str(e)}"
+EVALUATION CRITERIA:
+
+1. TECHNICAL ACCURACY (40%):
+   - Correctness of information
+   - Depth of understanding
+   - Use of appropriate terminology
+   - Keyword coverage
+
+2. COMPLETENESS (30%):
+   - All aspects of question addressed
+   - Sufficient detail and examples
+   - Logical flow and structure
+
+3. COMMUNICATION (20%):
+   - Clarity of explanation
+   - Appropriate pace and tone
+   - Confidence in delivery
+   - Professional language
+
+4. PROBLEM-SOLVING (10%):
+   - Analytical approach
+   - Creative thinking
+   - Practical application
+
+OUTPUT FORMAT:
+- Overall score (0-100)
+- Category scores (technical, completeness, communication, confidence)
+- Strengths (2-3 points)
+- Areas for improvement (2-3 points)
+- Specific actionable feedback
+- Final recommendation (Strong Pass, Pass, Borderline, Fail)
+
+Be fair, constructive, and specific. Focus on growth, not just criticism."""
+
+# Global instance
+evaluator_agent = EvaluatorAgent()

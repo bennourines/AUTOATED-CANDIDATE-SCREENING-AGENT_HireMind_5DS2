@@ -281,3 +281,5 @@ class AnswerEvaluator:
 
 # Global instance
 answer_evaluator = AnswerEvaluator()
+# Export as 'evaluator' for compatibility
+evaluator = answer_evaluator
