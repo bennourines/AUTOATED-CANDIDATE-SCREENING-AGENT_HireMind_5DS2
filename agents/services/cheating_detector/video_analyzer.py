@@ -14,6 +14,9 @@ import mediapipe as mp
 from typing import Dict, List, Optional, Tuple
 import logging
 from collections import defaultdict
+import subprocess  # ADD THIS
+import os
+import tempfile  # ADD THIS
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +63,253 @@ class VideoAnalyzer:
         self.RIGHT_EYE_CORNER = 33
         
         logger.info("✅ Video Analyzer initialized")
+
+    def extract_audio_from_video(self, video_path: str) -> Optional[str]:
+        """
+        Extract audio track from video file.
+        
+        Args:
+            video_path: Path to video file
+            
+        Returns:
+            Path to extracted audio file (WAV format) or None
+        """
+        logger.info(f"Extracting audio from video: {video_path}")
+        
+        try:
+            # Create temporary audio file
+            audio_fd, audio_path = tempfile.mkstemp(suffix='.wav', prefix='extracted_audio_')
+            os.close(audio_fd)
+            
+            # Use ffmpeg to extract audio
+            command = [
+                'ffmpeg',
+                '-i', video_path,           # Input video
+                '-vn',                       # No video
+                '-acodec', 'pcm_s16le',     # PCM 16-bit WAV
+                '-ar', '16000',             # 16kHz sample rate (optimal for Vosk)
+                '-ac', '1',                 # Mono channel
+                '-y',                        # Overwrite output
+                audio_path
+            ]
+            
+            # Run ffmpeg
+            result = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"FFmpeg failed: {result.stderr}")
+                return None
+            
+            # Verify audio file exists and has content
+            if os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000:
+                logger.info(f"✅ Audio extracted to: {audio_path}")
+                return audio_path
+            else:
+                logger.error("Audio extraction produced empty file")
+                return None
+                
+        except FileNotFoundError:
+            logger.error("FFmpeg not found. Install: 'pip install ffmpeg-python' or download from https://ffmpeg.org/")
+            return None
+        except Exception as e:
+            logger.error(f"Audio extraction failed: {e}")
+            return None
+
+    async def analyze_video_with_audio(
+        self,
+        video_path: str,
+        sample_rate: int = 15,
+        analyze_audio: bool = True
+    ) -> Dict:
+        """
+        Comprehensive video + audio analysis.
+        
+        Args:
+            video_path: Path to video file
+            sample_rate: Frame sampling rate
+            analyze_audio: Whether to extract and analyze audio
+            
+        Returns:
+            Complete analysis including video and audio results
+        """
+        logger.info(f"Starting comprehensive video+audio analysis: {video_path}")
+        
+        try:
+            # ═══════════════════════════════════════════════════
+            # STEP 1: VIDEO ANALYSIS (existing)
+            # ═══════════════════════════════════════════════════
+            video_results = self.analyze_video(video_path, sample_rate)
+            
+            # ═══════════════════════════════════════════════════
+            # STEP 2: AUDIO EXTRACTION & ANALYSIS (new)
+            # ═══════════════════════════════════════════════════
+            audio_results = {}
+            audio_path = None
+            
+            if analyze_audio:
+                logger.info("🎵 Extracting audio from video...")
+                audio_path = self.extract_audio_from_video(video_path)
+                
+                if audio_path:
+                    # Import agents
+                    try:
+                        from interview_agents.stt_agent import STTAgent
+                        from interview_agents.prosody_agent import ProsodyAgent
+                         
+                        # Create agent instances
+                        stt_agent = STTAgent()
+                        prosody_agent = ProsodyAgent()
+                        # Transcription
+                        logger.info("📝 Transcribing audio...")
+                        stt_result = await stt_agent.execute(task='transcribe', data={'audio_path': audio_path})
+
+                        
+                        # Prosody analysis
+                        logger.info("🎵 Analyzing prosody...")
+                        prosody_result = await prosody_agent.execute(task='analyze', data={'audio_path': audio_path})
+
+                        
+                        audio_results = {
+                            'transcription': stt_result,
+                            'prosody': prosody_result,
+                            'audio_extracted': True,
+                            'audio_path': audio_path
+                        }
+                        
+                        logger.info("✅ Audio analysis complete")
+                        
+                    except Exception as e:
+                        logger.error(f"Audio analysis failed: {e}")
+                        audio_results = {
+                            'error': str(e),
+                            'audio_extracted': True,
+                            'audio_path': audio_path
+                        }
+                else:
+                    audio_results = {
+                        'error': 'Audio extraction failed',
+                        'audio_extracted': False
+                    }
+            
+            # ═══════════════════════════════════════════════════
+            # STEP 3: COMBINE RESULTS
+            # ═══════════════════════════════════════════════════
+            complete_analysis = {
+                **video_results,  # Include all video analysis
+                'audio_analysis': audio_results,
+                'analysis_type': 'video+audio' if analyze_audio else 'video_only'
+            }
+            
+            # Cleanup temporary audio file
+            if audio_path and os.path.exists(audio_path):
+                try:
+                    os.unlink(audio_path)
+                    logger.info(f"🗑️ Cleaned up audio: {audio_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup audio: {e}")
+            
+            logger.info("✅ Comprehensive analysis complete")
+            return complete_analysis
+            
+        except Exception as e:
+            logger.error(f"Comprehensive analysis failed: {e}")
+            return {
+                'error': str(e),
+                'analysis_complete': False
+            }
+
+    
+    def analyze_video(
+        self,
+        video_path: str,
+        sample_rate: int = 15
+    ) -> Dict:
+        """
+        Comprehensive video analysis combining all detection methods.
+        
+        Args:
+            video_path: Path to video file
+            sample_rate: Frame sampling rate
+            
+        Returns:
+            Complete video analysis results
+        """
+        logger.info(f"Starting comprehensive video analysis: {video_path}")
+        
+        try:
+            # Run all analysis methods
+            gaze_results = self.analyze_gaze_behavior(video_path, sample_rate)
+            head_pose_results = self.analyze_head_pose(video_path, sample_rate * 2)
+            face_consistency_results = self.detect_face_consistency(video_path, sample_rate * 4)
+            
+            # Combine results
+            complete_analysis = {
+                'gaze_analysis': gaze_results,
+                'head_pose_analysis': head_pose_results,
+                'face_consistency': face_consistency_results,
+                'overall_suspicious': self._calculate_overall_suspicion(
+                    gaze_results,
+                    head_pose_results,
+                    face_consistency_results
+                ),
+                'analysis_complete': True
+            }
+            
+            logger.info("✅ Video analysis complete")
+            logger.info(f"Comprehensive video analysis results: {complete_analysis}")
+
+            return complete_analysis
+            
+        except Exception as e:
+            logger.error(f"Video analysis failed: {e}")
+            return {
+                'error': str(e),
+                'analysis_complete': False,
+                'gaze_analysis': self._get_default_gaze_result(),
+                'head_pose_analysis': {},
+                'face_consistency': {},
+                'overall_suspicious': False
+            }
+    
+    def _calculate_overall_suspicion(
+        self,
+        gaze: Dict,
+        head_pose: Dict,
+        face: Dict
+    ) -> bool:
+        """
+        Calculate overall suspicion level from all analyses.
+        
+        Returns:
+            True if multiple red flags detected
+        """
+        red_flags = 0
+        
+        # Gaze red flags
+        if gaze.get('reading_pattern_detected'):
+            red_flags += 1
+        if gaze.get('erratic_gaze'):
+            red_flags += 1
+        if gaze.get('camera_focus_ratio', 1.0) < 0.5:
+            red_flags += 1
+        
+        # Head pose red flags
+        if head_pose.get('looking_at_secondary_screen'):
+            red_flags += 1
+        
+        # Face consistency red flags
+        if not face.get('consistent', True):
+            red_flags += 2  # Major red flag
+        
+        # Suspicious if 2+ red flags
+        return red_flags >= 2
+
+
     
     def analyze_gaze_behavior(
         self,
