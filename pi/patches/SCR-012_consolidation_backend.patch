@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Capy <capy@capy.ai>
+Date: Mon, 27 Oct 2025 12:00:00 +0000
+Subject: [SCR-012] Consolidate backend into single FastAPI app with modular routers
+
+---
+ backend/app/__init__.py                          |   0
+ backend/app/main.py                              |  37 +++++++++++
+ backend/app/database.py                          |  19 ++++++
+ backend/app/models.py                            |  26 ++++++++
+ backend/app/schemas.py                           |  38 +++++++++++
+ backend/app/services/utils.py                    |  32 +++++++++
+ backend/app/services/matching_engine.py          |  20 ++++++
+ backend/app/services/interview_analytics.py      |   3 +
+ backend/app/services/hr_question_recommender.py  |   3 +
+ backend/app/services/ai_use_detection.py         |   7 +++
+ backend/app/services/fairness.py                 |   6 ++
+ backend/app/services/feedback.py                 |   3 +
+ backend/app/services/dedup_shortlist.py          |   8 +++
+ backend/app/services/data_loader.py              |   2 +
+ backend/app/api/v1/jobs.py                       |  30 ++++++++
+ backend/app/api/v1/candidates.py                 |  46 +++++++++++++
+ backend/app/api/v1/scoring.py                    |  23 +++++++
+ backend/app/api/v1/interviews.py                 |  17 +++++
+ backend/app/api/v1/ai_detect.py                  |  11 ++++
+ backend/app/api/v1/fairness.py                   |  13 ++++
+ backend/app/api/v1/utils.py                      |  13 ++++
+ 21 files changed, 328 insertions(+)
+ create mode 100644 backend/app/__init__.py
+ create mode 100644 backend/app/main.py
+ create mode 100644 backend/app/database.py
+ create mode 100644 backend/app/models.py
+ create mode 100644 backend/app/schemas.py
+ create mode 100644 backend/app/services/utils.py
+ create mode 100644 backend/app/services/matching_engine.py
+ create mode 100644 backend/app/services/interview_analytics.py
+ create mode 100644 backend/app/services/hr_question_recommender.py
+ create mode 100644 backend/app/services/ai_use_detection.py
+ create mode 100644 backend/app/services/fairness.py
+ create mode 100644 backend/app/services/feedback.py
+ create mode 100644 backend/app/services/dedup_shortlist.py
+ create mode 100644 backend/app/services/data_loader.py
+ create mode 100644 backend/app/api/v1/jobs.py
+ create mode 100644 backend/app/api/v1/candidates.py
+ create mode 100644 backend/app/api/v1/scoring.py
+ create mode 100644 backend/app/api/v1/interviews.py
+ create mode 100644 backend/app/api/v1/ai_detect.py
+ create mode 100644 backend/app/api/v1/fairness.py
+ create mode 100644 backend/app/api/v1/utils.py
+---
++diff --git a/backend/app/main.py b/backend/app/main.py
++new file mode 100644
++index 0000000..1111111
++--- /dev/null
+++++ b/backend/app/main.py
++@@
++ import os
++ from fastapi import FastAPI
++ from fastapi.middleware.cors import CORSMiddleware
++ from .api.v1.jobs import router as jobs_router
++ from .api.v1.candidates import router as candidates_router
++ from .api.v1.scoring import router as scoring_router
++ from .api.v1.interviews import router as interviews_router
++ from .api.v1.ai_detect import router as ai_detect_router
++ from .api.v1.fairness import router as fairness_router
++ from .api.v1.utils import router as utils_router
++ app = FastAPI(title="Unified Hiring Platform API", version="1.0.0")
++ origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
++ app.add_middleware(
++     CORSMiddleware,
++     allow_origins=[o.strip() for o in origins if o.strip()],
++     allow_credentials=True,
++     allow_methods=["*"],
++     allow_headers=["*"],
++ )
++ app.include_router(jobs_router, prefix="/api/v1")
++ app.include_router(candidates_router, prefix="/api/v1")
++ app.include_router(scoring_router, prefix="/api/v1")
++ app.include_router(interviews_router, prefix="/api/v1")
++ app.include_router(ai_detect_router, prefix="/api/v1")
++ app.include_router(fairness_router, prefix="/api/v1")
++ app.include_router(utils_router, prefix="/api/v1")
++ @app.get("/health")
++ async def health():
++     return {"status": "ok"}
++
++diff --git a/backend/app/database.py b/backend/app/database.py
++new file mode 100644
++index 0000000..1111111
++--- /dev/null
+++++ b/backend/app/database.py
++@@
++ import os
++ from sqlalchemy import create_engine
++ from sqlalchemy.orm import sessionmaker, declarative_base
++ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
++ connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
++ engine = create_engine(DATABASE_URL, connect_args=connect_args)
++ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
++ Base = declarative_base()
++ def get_db():
++     db = SessionLocal()
++     try:
++         yield db
++     finally:
++         db.close()
