@@ -16,6 +16,11 @@ import interview_agent # Correctly import our new module
 from database import engine, get_db
 import re
 
+class QuestionRequest(BaseModel):
+    job_title: str
+
+class QuestionResponse(BaseModel):
+    questions: List[str]
 models.Base.metadata.create_all(bind=engine)
 app = FastAPI(title="AI Hiring App - Final Version", version="1.1.0")
 
@@ -50,6 +55,12 @@ class JobDescriptionText(BaseModel):
 class ParsedJobData(BaseModel):
     title: Optional[str] = None
     skills: List[str] = []
+class ShortlistDashboardResponse(BaseModel):
+    total_shortlisted: int
+    total_approved: int
+    pending_review: int
+    avg_match_score: int
+    candidates: List[schemas.CandidateProfile]
 # --- ALL ENDPOINTS ---
 @app.post("/utils/parse-resume-for-profile", response_model=ParsedResumeData, tags=["Utilities"])
 async def parse_resume_for_profile(file: UploadFile = File(...)):
@@ -57,6 +68,68 @@ async def parse_resume_for_profile(file: UploadFile = File(...)):
     file_bytes = await file.read()
     parsed_data = utils.parse_resume(file_bytes, file.filename)
     return parsed_data
+
+@app.post("/jobs/{job_id}/upload_resume/", response_model=schemas.CandidateProfile, tags=["Candidates"])
+async def upload_resume(job_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    db_job = db.query(models.Job).filter(models.Job.id == job_id).first()
+    if not db_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    file_bytes = await file.read()
+    parsed_data = utils.parse_resume(file_bytes, file.filename)
+    
+    if "error" in parsed_data or not parsed_data.get("email"):
+        raise HTTPException(status_code=400, detail="Could not parse resume or find an email.")
+        
+    existing_candidate = db.query(models.Candidate).filter(models.Candidate.email == parsed_data["email"], models.Candidate.job_id == job_id).first()
+    if existing_candidate:
+        raise HTTPException(status_code=400, detail="Candidate has already applied for this job.")
+    
+    # =============================================================
+    # START OF NEW CODE
+    # =============================================================
+    
+    # 1. Get the raw text from the parsed data
+    resume_text = parsed_data.get("raw_text", "")
+    job_description = db_job.description
+    
+    # 2. Call the new AI function to get insights
+    ai_insights = utils.generate_candidate_insights(resume_text, job_description)
+
+    # =============================================================
+    # END OF NEW CODE
+    # =============================================================
+    
+    # 3. Create the Candidate record and include the new insights
+    db_candidate = models.Candidate(
+        name=parsed_data.get("full_name"),
+        email=parsed_data.get("email"),
+        skills=parsed_data.get("skills"),
+        raw_text=resume_text,
+        job_id=job_id,
+        ai_insights=ai_insights # <-- SAVE THE INSIGHTS
+    )
+    
+    db.add(db_candidate)
+    db.commit()
+    db.refresh(db_candidate)
+    return db_candidate
+
+@app.post("/ai/generate-interview-questions", response_model=QuestionResponse, tags=["AI Tools"])
+def generate_interview_questions(data: QuestionRequest):
+    prompt = (
+        f"You are a hiring manager for a '{data.job_title}' position. "
+        "Generate a list of 5 insightful interview questions for this role. "
+        "The list should include one behavioral question, one technical question, and one situational question. "
+        "Return ONLY a numbered list of the questions, with no other text."
+    )
+    
+    response_text = utils.call_llm(prompt)
+    
+    # Simple parsing of the numbered list
+    questions = [q.strip() for q in response_text.split('\n') if q.strip()]
+    
+    return {"questions": questions}
 
 @app.post("/users/register", response_model=schemas.User, tags=["Authentication"])
 def create_user_simple(user: schemas.UserCreate, db: Session = Depends(get_db)):
@@ -144,6 +217,45 @@ def create_job_seeker_profile(profile_data: schemas.ProfileCompleteData, db: Ses
     # In a full app, you'd also save the rest of the profile data here.
     
     return new_user
+# In app/main.py
+
+# --- Add these two Pydantic models at the top with your other schemas ---
+class QuestionRequest(BaseModel):
+    job_title: str
+
+class QuestionResponse(BaseModel):
+    questions: List[str]
+
+
+# --- Add this new endpoint function anywhere in the file ---
+@app.post("/ai/generate-interview-questions", response_model=QuestionResponse, tags=["AI Tools"])
+def generate_interview_questions(data: QuestionRequest):
+    """
+    Takes a job title and uses an LLM to generate a list of relevant interview questions.
+    """
+    if not data.job_title:
+        raise HTTPException(status_code=400, detail="Job title cannot be empty.")
+
+    prompt = (
+        f"You are an expert hiring manager preparing to interview a candidate for a '{data.job_title}' position. "
+        "Generate a list of 5 insightful interview questions for this role. "
+        "The list should include a mix of behavioral, technical, and situational questions. "
+        "Return ONLY a numbered list of the questions, with no introductory or concluding text."
+    )
+    
+    # We use our existing utility function to call the LLM
+    response_text = utils.call_llm(prompt)
+    
+    # Split the response by newlines and filter out any empty lines or non-question text
+    questions = [
+        line.strip().lstrip('0123456789. ') for line in response_text.split('\n') 
+        if line.strip() and len(line) > 5
+    ]
+    
+    if not questions:
+        return {"questions": ["The AI could not generate questions at this time. Please try a different job title."]}
+        
+    return {"questions": questions}
 @app.post("/auth/register/recruiter", response_model=schemas.User, tags=["Authentication"])
 def register_recruiter(user_data: RecruiterCreate, db: Session = Depends(get_db)):
     # Check if user email already exists
@@ -189,7 +301,25 @@ def register_manager(user_data: ManagerCreate, db: Session = Depends(get_db)):
     )
     db.add(new_user); db.commit(); db.refresh(new_user)
     return new_user
+class SummaryResponse(BaseModel):
+    summary: str
 
+@app.get("/ai/summarize-candidate/{candidate_id}", response_model=SummaryResponse, tags=["AI Tools"])
+def summarize_candidate_for_manager(candidate_id: int, db: Session = Depends(get_db)):
+    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id).first()
+    job = db.query(models.Job).filter(models.Job.id == candidate.job_id).first()
+    if not candidate or not job:
+        raise HTTPException(status_code=404, detail="Candidate or Job not found.")
+
+    prompt = (
+        f"You are a busy hiring manager. I need a very concise summary of this candidate. "
+        f"Based on their resume text below, give me exactly 3 bullet points highlighting their suitability for the '{job.title}' role. "
+        "Focus on experience and key skills.\n\n"
+        f"Resume Text:\n\"{candidate.raw_text}\""
+    )
+    
+    summary = utils.call_llm(prompt)
+    return {"summary": summary}
 @app.get("/recruiter/all-candidates", response_model=List[schemas.CandidateProfile], tags=["Recruiter Actions"])
 def get_all_candidates_with_scores(db: Session = Depends(get_db)):
     """
@@ -215,6 +345,7 @@ def get_all_candidates_with_scores(db: Session = Depends(get_db)):
             candidate.match_score = 0 # Default score if job is not found
 
     return all_candidates
+
 @app.post("/utils/parse-job-description", response_model=ParsedJobData, tags=["Utilities"])
 def parse_job_description(job_text: JobDescriptionText):
     """
@@ -288,3 +419,59 @@ def get_user_by_email(email: str, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+class ShortlistDashboardResponse(BaseModel):
+    total_shortlisted: int
+    total_approved: int
+    pending_review: int
+    candidates: List[schemas.CandidateProfile]
+
+@app.get("/recruiter/dashboard-data", response_model=ShortlistDashboardResponse, tags=["Recruiter"])
+def get_recruiter_dashboard_data(db: Session = Depends(get_db)):
+    all_candidates = db.query(models.Candidate).all()
+    all_jobs_dict = {j.id: j for j in db.query(models.Job).all()}
+
+    for cand in all_candidates:
+        job = all_jobs_dict.get(cand.job_id)
+        if job:
+            cand.match_score = utils.calculate_match_score(cand.skills, job.required_skills)
+        else:
+            cand.match_score = 0
+    
+    return {
+        "total_shortlisted": len([c for c in all_candidates if c.status == 'shortlisted']),
+        "total_approved": len([c for c in all_candidates if c.status == 'approved']),
+        "pending_review": len([c for c in all_candidates if c.status == 'shortlisted']),
+        "candidates": sorted(all_candidates, key=lambda c: c.match_score, reverse=True)
+    }
+@app.get("/recruiter/dashboard-data", response_model=ShortlistDashboardResponse, tags=["Recruiter"])
+def get_recruiter_dashboard_data(db: Session = Depends(get_db)):
+    """
+    Provides all the necessary data for the main recruiter dashboard in a single call.
+    """
+    all_candidates = db.query(models.Candidate).all()
+    all_jobs_dict = {j.id: j for j in db.query(models.Job).all()}
+    
+    total_score = 0
+    candidate_count = 0
+
+    for cand in all_candidates:
+        job = all_jobs_dict.get(cand.job_id)
+        if job:
+            cand.match_score = utils.calculate_match_score(cand.skills, job.required_skills)
+            total_score += cand.match_score
+            candidate_count += 1
+        else:
+            cand.match_score = 0
+            
+    avg_score = int(total_score / candidate_count) if candidate_count > 0 else 0
+    
+    # Sort candidates by score after calculation
+    sorted_candidates = sorted(all_candidates, key=lambda c: c.match_score, reverse=True)
+
+    return {
+        "total_shortlisted": len([c for c in all_candidates if c.status == 'shortlisted']),
+        "total_approved": len([c for c in all_candidates if c.status == 'approved']),
+        "pending_review": len([c for c in all_candidates if c.status == 'shortlisted']),
+        "avg_match_score": avg_score,
+        "candidates": sorted_candidates
+    }
