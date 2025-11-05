@@ -1,7 +1,0 @@
-{
-  "info": {"name": "Unified API v1", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
-  "item": [
-    {"name": "Health", "request": {"method": "GET", "url": "http://localhost:8000/health"}},
-    {"name": "Create Job", "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}], "url": "http://localhost:8000/api/v1/jobs", "body": {"mode": "raw", "raw": "{\n  \"title\": \"Engineer\",\n  \"description\": \"Build things\"\n}"}}}
-  ]
-}

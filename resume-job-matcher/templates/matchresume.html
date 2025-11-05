@@ -69,11 +69,11 @@
         }
     </style>
 </head>
-
+<!--src="{{ url_for('static', filename='image1.jpg.jpg') }}"!-->
 <body>
     <div class="container">
         <h1 class="mb-4">Job Description and Resume Matcher</h1>
-        <img src="{{ url_for('static', filename='image1.jpg.jpg') }}" alt="Resume Matcher" class="header-image">
+        <!--<img  alt="Resume Matcher" class="header-image">-->
         <div class="card">
             <div class="card-body">
                 <form method="POST" action="/matcher" enctype="multipart/form-data">
