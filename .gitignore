@@ -18,3 +18,5 @@ frontend/yarn-error.log*
 .vscode/
 .idea/
 *.swp
+#data
+data_Scraping/data/
