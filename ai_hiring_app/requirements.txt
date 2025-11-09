@@ -1,22 +1,19 @@
-# FILE: requirements.txt
-# --- REWRITTEN FOR API-ONLY ---
+# In requirements.txt
 
+# Web Framework
 fastapi
 uvicorn[standard]
-sqlalchemy
-psycopg2-binary
 python-multipart
 
-# NLP and AI (API clients only)
-spacy
-requests
-openai  # Kept in case you want to switch LLM providers
-google-generativeai
-# Document Parsing
+# Database
+sqlalchemy
+psycopg2-binary
+huggingface_hub
+# --- ONLY DOCUMENT PARSING LIBRARIES ---
 python-docx
 pypdf
+# -------------------------------------
 
-# Speech / Voice (API clients only)
-deepgram-sdk>=3.0.0
-elevenlabs
-gTTS
+# Other utilities
+Faker
+requests

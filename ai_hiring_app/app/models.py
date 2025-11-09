@@ -14,6 +14,7 @@ class Candidate(Base):
     job_id = Column(Integer, ForeignKey("jobs.id"))
     status = Column(String, default="new", index=True)
     profile_vector = Column(ARRAY(Float), nullable=True) 
+    description = Column(Text, nullable=True)
 
 class Company(Base):
     __tablename__ = "companies"
