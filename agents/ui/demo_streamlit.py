@@ -9,6 +9,7 @@ Features:
 - Comprehensive evaluation
 """
 
+from typing import Dict
 import streamlit as st
 import asyncio
 import sys
@@ -17,7 +18,8 @@ from pathlib import Path
 import json
 import tempfile
 from datetime import datetime
-
+from typing import Optional
+import traceback
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -30,23 +32,47 @@ logger = logging.getLogger(__name__)
 
 # helper function
 
-def log_error(error_msg: str, exception: Exception = None):
+def log_error(error_msg: str, exception: "Optional[Exception]" = None):
     """Log error with details and display to user."""
+    
+
     logger.error(error_msg)
     if exception:
         logger.error(f"Exception details: {str(exception)}")
-        import traceback
         logger.error(traceback.format_exc())
-    
+
     st.error(f"❌ {error_msg}")
-    
+
     if exception:
         with st.expander("🔍 Technical Details"):
             st.code(str(exception))
             if st.checkbox("Show Full Traceback"):
-                import traceback
                 st.code(traceback.format_exc())
 
+
+def run_async(coroutine):
+    """
+    Safely run async coroutine in Streamlit.
+    
+    Args:
+        coroutine: Async function to run
+        
+    Returns:
+        Result from coroutine
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("Loop is closed")
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    try:
+        return loop.run_until_complete(coroutine)
+    except Exception as e:
+        logger.error(f"Async execution failed: {e}")
+        raise
 
 # ═══════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -933,7 +959,7 @@ def avatar_page():
             image_path = avatar_data.get('image_path')
             
             if image_path and os.path.exists(image_path):
-                st.image(image_path, use_container_width=True)
+                st.image(image_path, use_column_width=True)
                 
                 metadata = avatar_data.get('metadata', {})
                 
@@ -1011,6 +1037,7 @@ def statistics_page():
 # VIDEO ANALYZER PAGE -
 # ═══════════════════════════════════════════════════════════════
 
+
 def video_analyzer_page():
     """Standalone video analysis page for detailed behavioral analysis."""
     st.markdown('<div class="sub-header">🔍 Video Analyzer</div>', unsafe_allow_html=True)
@@ -1021,6 +1048,7 @@ def video_analyzer_page():
     - 👁️ Gaze tracking
     - 👥 Face verification
     - 📖 Reading behavior detection
+    - 🎵 **Audio transcription & prosody (NEW)**
     """)
     
     col1, col2 = st.columns([1, 1])
@@ -1041,69 +1069,100 @@ def video_analyzer_page():
             # Analysis options
             st.markdown("### Analysis Options")
             
-            analyze_emotions = st.checkbox("😊 Emotion Recognition", value=True)
-            analyze_gaze = st.checkbox("👁️ Gaze Tracking", value=True)
-            analyze_faces = st.checkbox("👥 Face Verification", value=True)
-            analyze_reading = st.checkbox("📖 Reading Detection", value=True)
+            col_a, col_b = st.columns(2)
             
-            # Frame sampling rate
-            frame_rate = st.slider(
-                "Frame Sampling Rate (fps)",
-                min_value=1,
-                max_value=30,
-                value=5,
-                help="Higher = more detailed but slower"
-            )
+            with col_a:
+                analyze_video = st.checkbox("📹 Video Analysis", value=True)
+                frame_rate = st.slider(
+                    "Frame Rate (fps)",
+                    min_value=1,
+                    max_value=30,
+                    value=5,
+                    help="Higher = more detailed but slower",
+                    disabled=not analyze_video
+                )
+            
+            with col_b:
+                analyze_audio = st.checkbox("🎵 Audio Analysis", value=True)
+                st.caption("Extracts audio and performs:")
+                st.caption("• Speech-to-text")
+                st.caption("• Prosody analysis")
             
             if st.button("🔍 Analyze Video", type="primary", use_container_width=True):
-                with st.spinner("Analyzing video... This may take a few minutes"):
-                    try:
-                        # Save video temporarily
-                        video_suffix = os.path.splitext(video_file.name)[1]
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=video_suffix) as tmp_video:
-                            tmp_video.write(video_file.read())
-                            video_path = tmp_video.name
-                        
-                        logger.info(f"✅ Video saved to: {video_path}")
-                        
-                        # Import video analyzer
-                        from services.cheating_detector.video_analyzer import video_analyzer
-                        
-                        # Analyze video
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-                        
-                        status_text.text("📹 Processing video frames...")
-                        progress_bar.progress(25)
-                        
-                        result = video_analyzer.analyze_video(
-                            video_path=video_path,
-                            sample_rate=frame_rate
-                        )
-                        
-                        progress_bar.progress(100)
-                        status_text.text("✅ Analysis complete!")
-                        
-                        # Store result
-                        st.session_state.video_analysis_result = result
-                        
-                        # Cleanup
+                if not analyze_video and not analyze_audio:
+                    st.error("❌ Please select at least one analysis type")
+                else:
+                    with st.spinner("Analyzing... This may take a few minutes"):
                         try:
-                            os.unlink(video_path)
-                            logger.info(f"🗑️ Cleaned up video: {video_path}")
+                            # Save video temporarily
+                            video_suffix = os.path.splitext(video_file.name)[1]
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=video_suffix) as tmp_video:
+                                tmp_video.write(video_file.read())
+                                video_path = tmp_video.name
+                            
+                            logger.info(f"✅ Video saved to: {video_path}", {
+                                'file_name': video_file.name,
+                                'file_size_mb': video_file.size / 1_000_000,
+                                'temp_path': video_path
+                            })
+                            
+                            # Import video analyzer
+                            from services.cheating_detector.video_analyzer import video_analyzer
+                            
+                            # Progress tracking
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
+                            if analyze_video and analyze_audio:
+                                status_text.text("📹 Analyzing video...")
+                                progress_bar.progress(20)
+                            
+                            logger.info("Starting comprehensive analysis", {
+                                'video_path': video_path,
+                                'frame_rate': frame_rate,
+                                'analyze_video': analyze_video,
+                                'analyze_audio': analyze_audio
+                            })
+                            
+                            # Run analysis
+                            result = run_async(
+                                video_analyzer.analyze_video_with_audio(
+                                    video_path=video_path,
+                                    sample_rate=frame_rate,
+                                    analyze_audio=analyze_audio
+                                )
+                            )
+                            
+                            progress_bar.progress(100)
+                            status_text.text("✅ Analysis complete!")
+                            
+                            logger.info("Analysis complete", {
+                                'success': result.get('analysis_complete', False),
+                                'has_audio': 'audio_analysis' in result,
+                                'suspicious': result.get('overall_suspicious', False)
+                            })
+                            
+                            logger.debug("Full analysis result", result)
+                            
+                            # Store result
+                            st.session_state.video_analysis_result = result
+                            
+                            # Cleanup
+                            try:
+                                os.unlink(video_path)
+                                logger.info(f"🗑️ Cleaned up video: {video_path}")
+                            except Exception as e:
+                                logger.warning(f"Failed to cleanup video: {e}")
+                            
+                            st.success("✅ Analysis completed!")
+                            st.rerun()
+                            
                         except Exception as e:
-                            logger.warning(f"Failed to cleanup video: {e}")
-                        
-                        st.success("✅ Video analysis completed!")
-                        st.rerun()
-                        
-                    except Exception as e:
-                        st.error(f"❌ Error analyzing video: {str(e)}")
-                        logger.error(f"Video analysis failed: {e}")
-                        
-                        with st.expander("🔍 Error Details"):
-                            import traceback
-                            st.code(traceback.format_exc())
+                            log_error(
+                                "Analysis failed",
+                                data={'video_file': video_file.name},
+                                exception=e
+                            )
     
     with col2:
         st.markdown("### Analysis Results")
@@ -1111,222 +1170,390 @@ def video_analyzer_page():
         if 'video_analysis_result' in st.session_state:
             result = st.session_state.video_analysis_result
             
-            # Create tabs for different analyses
-            tab1, tab2, tab3, tab4 = st.tabs([
-                "😊 Emotions",
-                "👁️ Gaze",
-                "👥 Faces",
-                "📊 Summary"
-            ])
+            logger.debug("Displaying analysis results", result)
             
-            # ═══════════════════════════════════════════════
-            # TAB 1: EMOTION ANALYSIS
-            # ═══════════════════════════════════════════════
-            with tab1:
-                st.markdown("#### 😊 Emotion Distribution")
-                
-                emotion_timeline = result.get('emotion_timeline', [])
-                
-                if emotion_timeline:
-                    # Count emotions
-                    emotion_counts = {}
-                    for frame in emotion_timeline:
-                        emotion = frame.get('dominant_emotion', 'unknown')
-                        emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
-                    
-                    # Display chart
-                    st.bar_chart(emotion_counts)
-                    
-                    # Statistics
-                    total_frames = len(emotion_timeline)
-                    st.write(f"**Total Frames Analyzed:** {total_frames}")
-                    
-                    # Most common emotion
-                    if emotion_counts:
-                        most_common = max(emotion_counts.items(), key=lambda x: x[1])
-                        st.metric(
-                            "Most Common Emotion",
-                            most_common[0].title(),
-                            f"{most_common[1]/total_frames*100:.1f}% of time"
-                        )
-                    
-                    # Timeline visualization
-                    with st.expander("📅 Emotion Timeline"):
-                        for i, frame in enumerate(emotion_timeline[:20]):  # Show first 20
-                            timestamp = frame.get('timestamp', i)
-                            emotion = frame.get('dominant_emotion', 'unknown')
-                            confidence = frame.get('confidence', 0)
-                            
-                            st.write(f"**{timestamp:.2f}s:** {emotion.title()} ({confidence*100:.1f}%)")
+            if result.get('analysis_complete'):
+                # Overall Status
+                if result.get('overall_suspicious'):
+                    st.error("🚨 SUSPICIOUS BEHAVIOR DETECTED")
                 else:
-                    st.info("No emotion data available")
-            
-            # ═══════════════════════════════════════════════
-            # TAB 2: GAZE ANALYSIS
-            # ═══════════════════════════════════════════════
-            with tab2:
-                st.markdown("#### 👁️ Gaze Tracking Results")
+                    st.success("✅ No Major Issues Detected")
                 
-                gaze_analysis = result.get('gaze_analysis', {})
+                # Create tabs based on what was analyzed
+                tab_names = []
+                if 'gaze_analysis' in result:
+                    tab_names.extend(["👁️ Gaze", "🧍 Head Pose", "👥 Face"])
                 
-                if gaze_analysis:
-                    col1, col2 = st.columns(2)
+                if 'audio_analysis' in result:
+                    tab_names.extend(["📝 Transcript", "🎵 Prosody"])
+                
+                tab_names.extend(["📊 Summary", "🔧 Raw Data"])
+                
+                tabs = st.tabs(tab_names)
+                tab_idx = 0
+                
+                # ═══════════════════════════════════════════════════
+                # VIDEO ANALYSIS TABS
+                # ═══════════════════════════════════════════════════
+                if 'gaze_analysis' in result:
+                    # TAB: Gaze Analysis
+                    with tabs[tab_idx]:
+                        display_gaze_analysis(result['gaze_analysis'])
+                    tab_idx += 1
                     
-                    with col1:
-                        camera_focus = gaze_analysis.get('camera_focus_ratio', 0)
-                        st.metric(
-                            "Camera Focus",
-                            f"{camera_focus*100:.1f}%",
-                            help="Percentage of time looking at camera"
-                        )
+                    # TAB: Head Pose Analysis
+                    with tabs[tab_idx]:
+                        display_head_pose_analysis(result['head_pose_analysis'])
+                    tab_idx += 1
                     
-                    with col2:
-                        avg_deviation = gaze_analysis.get('average_gaze_deviation', 0)
-                        st.metric(
-                            "Avg Gaze Deviation",
-                            f"{avg_deviation:.1f}°",
-                            help="Average angular deviation from camera"
-                        )
+                    # TAB: Face Consistency
+                    with tabs[tab_idx]:
+                        display_face_consistency(result['face_consistency'])
+                    tab_idx += 1
+                
+                # ═══════════════════════════════════════════════════
+                # AUDIO ANALYSIS TABS 
+                # ═══════════════════════════════════════════════════
+                if 'audio_analysis' in result and result['audio_analysis'].get('audio_extracted'):
+                    audio = result['audio_analysis']
+                    # DEBUG: Log what we're getting
+                    logger.info(f"Result keys: {result.keys()}")
+                    logger.info(f"Result audio keys: {audio}")
+
+                    logger.info(f"Transcript value: {result.get('transcript', 'KEY NOT FOUND')}")
                     
-                    # Reading pattern detection
-                    reading_detected = gaze_analysis.get('reading_pattern_detected', False)
-                    
-                    if reading_detected:
-                        st.warning("⚠️ **Reading Pattern Detected**")
-                        st.write("Candidate may be reading from external sources")
+                    # TAB: Transcript
+                    with tabs[tab_idx]:
+                        st.markdown("### 📝 Speech Transcription")
                         
-                        reading_segments = gaze_analysis.get('reading_segments', [])
-                        if reading_segments:
-                            st.write(f"**Detected {len(reading_segments)} reading segment(s):**")
-                            for segment in reading_segments:
-                                st.write(f"- {segment['start']:.1f}s - {segment['end']:.1f}s")
+                        if 'transcription' in audio:
+                            trans = audio['transcription']
+                            logger.info(f"Result transcription keys: {trans}")
+
+                            
+                            if trans.get('success'):
+                                transcript = trans.get('transcript', '')
+                                
+                                # Display transcript
+                                st.text_area(
+                                    "Transcript",
+                                    value=transcript,
+                                    height=300,
+                                    disabled=True
+                                )
+                                
+                                # Metrics
+                                col1, col2, col3 = st.columns(3)
+                                
+                                with col1:
+                                    word_count = len(transcript.split())
+                                    st.metric("Word Count", word_count)
+                                
+                                with col2:
+                                    char_count = len(transcript)
+                                    st.metric("Character Count", char_count)
+                                
+                                with col3:
+                                    confidence = trans.get('confidence', 0)
+                                    st.metric("Confidence", f"{confidence*100:.1f}%")
+                                
+                                # Download button
+                                st.download_button(
+                                    label="📥 Download Transcript",
+                                    data=transcript,
+                                    file_name=f"transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                                    mime="text/plain"
+                                )
+                            else:
+                                st.error(f"❌ Transcription failed: {trans.get('error')}")
+                        else:
+                            st.warning("⚠️ Transcription not available")
+                    
+                    tab_idx += 1
+                    
+                    # TAB: Prosody Analysis
+                    with tabs[tab_idx]:
+                        st.markdown("### 🎵 Prosody Analysis")
+                        
+                        if 'prosody' in audio:
+                            prosody = audio['prosody']
+                            
+                            if prosody.get('success'):
+                                # Extract metrics
+                                prosody_result = prosody.get('result', '')
+                                
+                                # Extract JSON metrics from the result string
+                                import re
+                                import json
+                                
+                                metrics_dict = None
+                                
+                                # Try to extract JSON from result
+                                json_match = re.search(r'PROSODY_METRICS_JSON:\s*(\{.*?\})', prosody_result, re.DOTALL)
+                                if json_match:
+                                    try:
+                                        metrics_dict = json.loads(json_match.group(1))
+                                    except:
+                                        metrics_dict = None
+                                
+                                # Now display safely
+                                if metrics_dict and isinstance(metrics_dict, dict):
+                                    col1, col2, col3 = st.columns(3)
+                                    
+                                    with col1:
+                                        st.markdown("**Pitch**")
+                                        st.metric("Avg Pitch", f"{metrics_dict.get('pitch_mean', 0):.1f}")
+                                        st.metric("Pitch Variance", f"{metrics_dict.get('pitch_variance', 0):.1f}")
+                                    
+                                    with col2:
+                                        st.markdown("**Energy**")
+                                        st.metric("Avg Energy", f"{metrics_dict.get('energy_mean', 0):.4f}")
+                                        st.metric("Energy Variance", f"{metrics_dict.get('energy_variance', 0):.4f}")
+                                    
+                                    with col3:
+                                        st.markdown("**Speaking Rate**")
+                                        st.metric("Speech Rate", f"{metrics_dict.get('speaking_rate', 0):.1f} words/min")
+                                        st.metric("Pause Ratio", f"{metrics_dict.get('pause_ratio', 0)*100:.1f}%")
+                                    
+                                    # Analysis interpretation
+                                    st.markdown("#### Analysis Interpretation")
+                                    interpretation = []
+                                    
+                                    if metrics_dict.get('pitch_variance', 0) > 100:
+                                        interpretation.append("✅ Good pitch variation (confident)")
+                                    else:
+                                        interpretation.append("⚠️ Low pitch variation (monotone/reading)")
+                                    
+                                    if metrics_dict.get('speaking_rate', 0) > 160:
+                                        interpretation.append("⚠️ Speaking too fast (nervous/rushed)")
+                                    elif metrics_dict.get('speaking_rate', 0) < 120:
+                                        interpretation.append("⚠️ Speaking too slow (uncertain/reading)")
+                                    else:
+                                        interpretation.append("✅ Normal speaking rate")
+                                    
+                                    if metrics_dict.get('pause_ratio', 0) > 0.3:
+                                        interpretation.append("⚠️ Frequent pauses (uncertain)")
+                                    else:
+                                        interpretation.append("✅ Good fluency")
+                                    
+                                    for item in interpretation:
+                                        st.markdown(f"- {item}")
+                                
+                                else:
+                                    # If no JSON extracted, show the text interpretation
+                                    st.info("Prosody analysis interpretation:")
+                                    st.write(prosody_result)
+                            else:
+                                st.error(f"❌ Prosody analysis failed: {prosody.get('error')}")
+                        else:
+                            st.warning("⚠️ Prosody analysis not available")
+                    
+                    tab_idx += 1
+                
+                # ═══════════════════════════════════════════════════
+                # SUMMARY TAB
+                # ═══════════════════════════════════════════════════
+                with tabs[tab_idx]:
+                    st.markdown("### 📊 Analysis Summary")
+                    
+                    # Count red flags
+                    red_flags = []
+                    
+                    if 'gaze_analysis' in result:
+                        gaze = result['gaze_analysis']
+                        if gaze.get('reading_pattern_detected'):
+                            red_flags.append("📖 Reading pattern detected")
+                        if gaze.get('erratic_gaze'):
+                            red_flags.append("👁️ Erratic eye movements")
+                        if gaze.get('camera_focus_ratio', 1.0) < 0.5:
+                            red_flags.append("📹 Poor camera focus")
+                    
+                    if 'head_pose_analysis' in result:
+                        head_pose = result['head_pose_analysis']
+                        if head_pose.get('looking_at_secondary_screen'):
+                            red_flags.append("🖥️ Looking at secondary screen")
+                    
+                    if 'face_consistency' in result:
+                        face = result['face_consistency']
+                        if not face.get('consistent', True):
+                            red_flags.append("🚨 Face inconsistency (possible impersonation)")
+                    
+                    # Audio red flags
+    
+                    
+                    if 'audio_analysis' in result:
+                        audio = result['audio_analysis']
+                        if 'prosody' in audio and audio['prosody'].get('success'):
+                            prosody_data = audio['prosody'].get('result', {})
+                            
+                            # FIX: Handle both dict and string results
+                            if isinstance(prosody_data, str):
+                                # Agent returned text interpretation, not metrics
+                                st.write(prosody_data)  # Display the text
+                                # Don't try to extract metrics from string
+                            elif isinstance(prosody_data, dict):
+                                # Raw metrics dictionary
+                                if prosody_data.get('pitch_variance', 0) < 50:
+                                    red_flags.append("🎵 Monotone speech (possible reading)")
+                                
+                                if prosody_data.get('pause_ratio', 0) > 0.3:
+                                    red_flags.append("⏸️ Excessive pauses (uncertainty)")
+
+                    # Display summary
+                    if red_flags:
+                        st.error(f"**{len(red_flags)} Red Flag(s) Detected:**")
+                        for flag in red_flags:
+                            st.markdown(f"- {flag}")
                     else:
-                        st.success("✅ No reading patterns detected")
+                        st.success("✅ No suspicious behavior detected")
                     
-                    # Gaze heatmap (if available)
-                    if 'gaze_positions' in gaze_analysis:
-                        with st.expander("🔥 Gaze Heatmap Data"):
-                            positions = gaze_analysis['gaze_positions']
-                            st.write(f"Tracked {len(positions)} gaze positions")
-                else:
-                    st.info("No gaze tracking data available")
-            
-            # ═══════════════════════════════════════════════
-            # TAB 3: FACE VERIFICATION
-            # ═══════════════════════════════════════════════
-            with tab3:
-                st.markdown("#### 👥 Face Verification")
-                
-                face_verification = result.get('face_verification', {})
-                
-                if face_verification:
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        num_faces = face_verification.get('num_unique_faces', 0)
-                        st.metric("Unique Faces", num_faces)
-                    
-                    with col2:
-                        same_person = face_verification.get('same_person_throughout', True)
-                        st.metric(
-                            "Same Person",
-                            "Yes" if same_person else "No",
-                            delta_color="off"
-                        )
-                    
-                    with col3:
-                        face_detected_ratio = face_verification.get('face_detected_ratio', 0)
-                        st.metric(
-                            "Face Visible",
-                            f"{face_detected_ratio*100:.1f}%"
-                        )
-                    
-                    # Multiple faces warning
-                    if num_faces > 1:
-                        st.error("🚨 **Multiple Faces Detected - Potential Cheating!**")
-                        st.write("This may indicate unauthorized assistance during the interview")
-                    elif not same_person:
-                        st.warning("⚠️ **Different Person Detected**")
-                        st.write("Face identity changed during interview")
+                    # Recommendations
+                    st.markdown("### Recommendations")
+                    if result.get('overall_suspicious') or len(red_flags) >= 2:
+                        st.warning("""
+                        **Action Required:**
+                        - Review the video manually
+                        - Consider re-interviewing the candidate
+                        - Investigate specific red flags
+                        - Document findings
+                        """)
                     else:
-                        st.success("✅ Single person verified throughout interview")
-                    
-                    # Face detection timeline
-                    if 'face_timeline' in face_verification:
-                        with st.expander("📅 Face Detection Timeline"):
-                            timeline = face_verification['face_timeline']
-                            for entry in timeline[:20]:
-                                st.write(f"**{entry['timestamp']:.2f}s:** {entry['num_faces']} face(s)")
-                else:
-                    st.info("No face verification data available")
-            
-            # ═══════════════════════════════════════════════
-            # TAB 4: SUMMARY
-            # ═══════════════════════════════════════════════
-            with tab4:
-                st.markdown("#### 📊 Analysis Summary")
+                        st.info("No action required. Behavior appears normal.")
                 
-                summary = result.get('summary', {})
+                tab_idx += 1
                 
-                if summary:
-                    # Overall verdict
-                    suspicious = summary.get('suspicious_behavior', False)
-                    
-                    if suspicious:
-                        st.error("🔴 **Suspicious Behavior Detected**")
-                    else:
-                        st.success("🟢 **No Suspicious Behavior Detected**")
-                    
-                    # Key findings
-                    st.markdown("**Key Findings:**")
-                    findings = summary.get('findings', [])
-                    
-                    if findings:
-                        for finding in findings:
-                            st.write(f"- {finding}")
-                    else:
-                        st.write("- No significant findings")
-                    
-                    # Confidence scores
-                    st.markdown("**Confidence Scores:**")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        emotion_confidence = summary.get('emotion_confidence', 0)
-                        st.metric("Emotion Detection", f"{emotion_confidence*100:.1f}%")
-                    
-                    with col2:
-                        gaze_confidence = summary.get('gaze_confidence', 0)
-                        st.metric("Gaze Tracking", f"{gaze_confidence*100:.1f}%")
-                else:
-                    st.write("No summary available")
+                # ═══════════════════════════════════════════════════
+                # RAW DATA TAB
+                # ═══════════════════════════════════════════════════
+                with tabs[tab_idx]:
+                    st.json(result)
                 
-                # Export results
-                if st.button("📥 Export Results as JSON"):
-                    import json
-                    
-                    json_str = json.dumps(result, indent=2)
+                # Export button
+                st.markdown("---")
+                if st.button("📥 Export Complete Results", use_container_width=True):
+                    json_str = json.dumps(result, indent=2, default=str)
                     st.download_button(
-                        label="Download JSON",
+                        label="💾 Download JSON",
                         data=json_str,
-                        file_name=f"video_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                        mime="application/json"
+                        file_name=f"analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
                     )
+            
+            else:
+                # Analysis failed
+                st.error(f"❌ Analysis failed: {result.get('error', 'Unknown error')}")
+                
+                with st.expander("🔧 Error Details"):
+                    st.json(result)
+        
         else:
             st.info("👆 Upload a video and click 'Analyze Video' to see results")
             
             # Example use cases
-            with st.expander("💡 Use Cases"):
+            with st.expander("💡 What Gets Analyzed"):
                 st.markdown("""
-                **When to use Video Analyzer:**
+                **Video Analysis:**
+                - Eye gaze patterns (reading detection)
+                - Head pose (secondary screen detection)
+                - Face consistency (impersonation detection)
+                - Attention and engagement
                 
-                1. **Post-Interview Review**: Analyze recorded interviews in detail
-                2. **Suspicious Behavior Investigation**: Deep dive into flagged interviews
-                3. **Training**: Review candidate body language and behavior
-                4. **Quality Assurance**: Verify interview integrity
-                5. **Research**: Study behavioral patterns across multiple interviews
+                **Audio Analysis (NEW):**
+                - Speech-to-text transcription
+                - Voice prosody (pitch, energy, rate)
+                - Speaking patterns (pauses, fluency)
+                - Confidence indicators
+                
+                **All from a single video upload!**
                 """)
+
+def display_gaze_analysis(gaze: Dict):
+    """Display gaze analysis results."""
+    st.markdown("### Gaze Behavior Analysis")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        camera_focus = gaze.get('camera_focus_ratio', 0)
+        st.metric(
+            "Camera Focus",
+            f"{camera_focus*100:.1f}%",
+            delta="Good" if camera_focus > 0.7 else "Poor"
+        )
+    
+    with col2:
+        reading = gaze.get('reading_pattern_detected', False)
+        st.metric(
+            "Reading Pattern",
+            "Detected" if reading else "Not Detected",
+            delta="⚠️" if reading else "✓"
+        )
+    
+    with col3:
+        erratic = gaze.get('erratic_gaze', False)
+        st.metric(
+            "Erratic Gaze",
+            "Yes" if erratic else "No",
+            delta="⚠️" if erratic else "✓"
+        )
+    
+    # Direction distribution
+    if gaze.get('direction_distribution'):
+        st.markdown("#### Gaze Direction Distribution")
+        st.bar_chart(gaze['direction_distribution'])
+
+def display_head_pose_analysis(head_pose: Dict):
+    """Display head pose analysis results."""
+    st.markdown("### Head Pose Analysis")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        avg_yaw = head_pose.get('avg_yaw', 0)
+        st.metric(
+            "Avg Yaw (L/R)",
+            f"{avg_yaw:.1f}°",
+            delta="Centered" if abs(avg_yaw) < 15 else "Off-center"
+        )
+    
+    with col2:
+        avg_pitch = head_pose.get('avg_pitch', 0)
+        st.metric(
+            "Avg Pitch (U/D)",
+            f"{avg_pitch:.1f}°",
+            delta="Good" if abs(avg_pitch) < 15 else "Poor"
+        )
+    
+    with col3:
+        secondary_screen = head_pose.get('looking_at_secondary_screen', False)
+        st.metric(
+            "Secondary Screen",
+            "Detected" if secondary_screen else "Not Detected",
+            delta="⚠️" if secondary_screen else "✓"
+        )
+
+def display_face_consistency(face: Dict):
+    """Display face consistency results."""
+    st.markdown("### Face Consistency Check")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        consistent = face.get('consistent', True)
+        st.metric(
+            "Face Consistency",
+            "Same Person" if consistent else "MISMATCH",
+            delta="✓" if consistent else "🚨"
+        )
+    
+    with col2:
+        similarity = face.get('avg_similarity', 0)
+        st.metric(
+            "Avg Similarity",
+            f"{similarity*100:.1f}%",
+            delta="High" if similarity > 0.8 else "Low"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════

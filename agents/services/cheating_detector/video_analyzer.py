@@ -160,19 +160,24 @@ class VideoAnalyzer:
                     try:
                         from interview_agents.stt_agent import STTAgent
                         from interview_agents.prosody_agent import ProsodyAgent
-                         
+                        
                         # Create agent instances
                         stt_agent = STTAgent()
                         prosody_agent = ProsodyAgent()
+                        
                         # Transcription
                         logger.info("📝 Transcribing audio...")
-                        stt_result = await stt_agent.execute(task='transcribe', data={'audio_path': audio_path})
-
+                        stt_result = await stt_agent.execute(
+                            task=f"Transcribe the audio file at: {audio_path}",
+                            context={'audio_path': audio_path}
+                        )
                         
                         # Prosody analysis
                         logger.info("🎵 Analyzing prosody...")
-                        prosody_result = await prosody_agent.execute(task='analyze', data={'audio_path': audio_path})
-
+                        prosody_result = await prosody_agent.execute(
+                            task=f"Analyze prosody features of the audio file at: {audio_path}",
+                            context={'audio_path': audio_path}
+                        )
                         
                         audio_results = {
                             'transcription': stt_result,
@@ -185,17 +190,24 @@ class VideoAnalyzer:
                         
                     except Exception as e:
                         logger.error(f"Audio analysis failed: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
                         audio_results = {
                             'error': str(e),
                             'audio_extracted': True,
-                            'audio_path': audio_path
+                            'audio_path': audio_path,
+                            'transcription': {'success': False, 'error': str(e)},
+                            'prosody': {
+                                'success': False, 
+                                'error': str(e),
+                                'avg_pitch': 0.0,
+                                'pitch_variance': 0.0,
+                                'avg_intensity': 0.0,
+                                'speech_rate': 0.0,
+                                'pause_ratio': 0.0
+                            }
                         }
-                else:
-                    audio_results = {
-                        'error': 'Audio extraction failed',
-                        'audio_extracted': False
-                    }
-            
+              
             # ═══════════════════════════════════════════════════
             # STEP 3: COMBINE RESULTS
             # ═══════════════════════════════════════════════════
